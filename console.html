@@ -118,8 +118,8 @@
       FetchTalos Console
     </div>
     <div class="conn-bar">
-      <input id="baseUrlInput" placeholder="API base URL" value="http://localhost:3000">
-      <input id="apiKeyInput" placeholder="API key" value="ft_test_51x9k2mq7dev">
+      <input id="baseUrlInput" placeholder="API base URL" value="https://fetchtalos.onrender.com">
+      <input id="apiKeyInput" placeholder="API key" value="ft_live_9x2kq7mZp4vRw">
       <button class="conn-btn" id="connectBtn">Connect</button>
       <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connLabel">not connected</span></span>
     </div>
@@ -232,7 +232,8 @@ async function api(path, opts={}){
   return data;
 }
 
-document.getElementById('connectBtn').onclick = async ()=>{
+document.getElementById('connectBtn').onclick = doConnect;
+async function doConnect(){
   BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
   API_KEY = document.getElementById('apiKeyInput').value;
   try{
@@ -247,9 +248,9 @@ document.getElementById('connectBtn').onclick = async ()=>{
     connected = false;
     document.getElementById('connDot').className = 'conn-dot bad';
     document.getElementById('connLabel').textContent = 'failed — check URL/key';
-    showToast('Connection failed: ' + err.message, true);
-  }
-};
+}
+// Auto-connect on load so friends opening this link see it working immediately, no clicking required.
+window.addEventListener('DOMContentLoaded', doConnect);
 
 /* TABS */
 document.querySelectorAll('.tabbtn').forEach(btn=>{
