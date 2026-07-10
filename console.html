@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FetchTalos API Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-base:#0B0E14; --bg-surface:#12161F; --bg-raised:#1A202C; --bg-input:#0D1017;
+    --border:#232B39; --border-soft:#1D2430;
+    --amber:#F2A65A; --teal:#5EEAD4; --red:#E8635A; --purple:#C4A2F0;
+    --text:#EDEFF3; --text-muted:#8B93A7; --text-faint:#525C6E;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--bg-base); color:var(--text); font-family:'Inter',sans-serif;}
+  h1,h2,h3{font-family:'Space Grotesk',sans-serif;}
+  code,.mono{font-family:'IBM Plex Mono',monospace;}
+  button{font-family:inherit; cursor:pointer;}
+  .wrap{max-width:1100px; margin:0 auto; padding:0 24px;}
+
+  header{border-bottom:1px solid var(--border-soft); padding:16px 0; position:sticky; top:0; background:rgba(11,14,20,.92); backdrop-filter:blur(8px); z-index:40;}
+  .header-inner{display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;}
+  .logo{display:flex; align-items:center; gap:9px; font-weight:600; font-size:15px;}
+  .logo svg{width:19px; height:19px;}
+
+  .conn-bar{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+  .conn-bar input{
+    background:var(--bg-input); border:1px solid var(--border); color:var(--text);
+    padding:7px 10px; border-radius:6px; font-size:12px; font-family:'IBM Plex Mono',monospace;
+  }
+  #baseUrlInput{width:220px;} #apiKeyInput{width:170px;}
+  .conn-btn{background:var(--amber); color:#0B0E14; border:none; padding:7px 14px; border-radius:6px; font-weight:600; font-size:12px;}
+  .conn-status{display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:11px; padding:3px 0;}
+  .conn-dot{width:7px; height:7px; border-radius:50%; background:var(--text-faint);}
+  .conn-dot.ok{background:var(--teal); box-shadow:0 0 6px var(--teal);}
+  .conn-dot.bad{background:var(--red);}
+
+  .banner{
+    background:rgba(242,166,90,.06); border:1px solid rgba(242,166,90,.2); border-radius:8px;
+    padding:10px 14px; margin:16px 0; font-size:12.5px; color:var(--text-muted); line-height:1.6;
+  }
+  .banner b{color:var(--amber);}
+
+  .tabbar{display:flex; gap:2px; margin:18px 0 0; border-bottom:1px solid var(--border-soft); overflow-x:auto;}
+  .tabbtn{background:none; border:none; padding:10px 15px; font-size:13px; font-weight:500; color:var(--text-faint); border-bottom:2px solid transparent; white-space:nowrap;}
+  .tabbtn.active{color:var(--text); border-bottom-color:var(--amber);}
+  main{padding:22px 0 70px;}
+  .panel{display:none;} .panel.active{display:block;}
+  .panel-head{margin-bottom:16px;}
+  .panel-head h2{font-size:17px; margin:0 0 3px;}
+  .panel-head .sub{font-size:12.5px; color:var(--text-muted); margin:0; font-family:'IBM Plex Mono',monospace;}
+
+  .stat-strip{display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-bottom:20px;}
+  @media(max-width:700px){.stat-strip{grid-template-columns:repeat(2,1fr);}}
+  .stat-cell{background:var(--bg-surface); padding:14px 16px;}
+  .stat-cell .l{font-size:10.5px; color:var(--text-faint); font-family:'IBM Plex Mono',monospace; margin-bottom:5px;}
+  .stat-cell .v{font-family:'Space Grotesk',sans-serif; font-size:17px; font-weight:600;}
+  .stat-cell .v.amber{color:var(--amber);} .stat-cell .v.teal{color:var(--teal);}
+
+  .tbl-wrap{border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--bg-surface);}
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  th{text-align:left; padding:10px 13px; font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--border); background:var(--bg-raised);}
+  td{padding:11px 13px; border-bottom:1px solid var(--border-soft); vertical-align:middle;}
+  tr:last-child td{border-bottom:none;}
+  .stack-tag{display:inline-block; background:var(--bg-raised); border:1px solid var(--border); color:var(--text-muted); font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 6px; border-radius:5px; margin:1px 2px 1px 0;}
+  .status-pill{font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 8px; border-radius:100px; display:inline-block;}
+  .status-available{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
+  .status-engaged{background:rgba(242,166,90,.1); color:var(--amber); border:1px solid rgba(242,166,90,.3);}
+  .status-pending{background:rgba(196,162,240,.1); color:var(--purple); border:1px solid rgba(196,162,240,.3);}
+  .status-settled{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
+  .row-btn{background:var(--bg-raised); border:1px solid var(--border); color:var(--text); font-size:11.5px; padding:5px 11px; border-radius:6px;}
+  .row-btn:hover{border-color:var(--amber);}
+  .row-btn:disabled{opacity:.4; cursor:not-allowed;}
+  .empty-state{padding:34px 20px; text-align:center; color:var(--text-faint); font-size:12.5px; font-family:'IBM Plex Mono',monospace;}
+
+  .search-row{display:flex; gap:9px; margin-bottom:14px; flex-wrap:wrap;}
+  .search-input, select{background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:8px 11px; border-radius:7px; font-size:12.5px; font-family:'Inter',sans-serif;}
+  .search-input{flex:1; min-width:180px;}
+
+  .field{margin-bottom:13px; max-width:320px;}
+  .field label{display:block; font-size:11.5px; color:var(--text-muted); margin-bottom:5px; font-family:'IBM Plex Mono',monospace;}
+  .field input, .field select{width:100%;}
+  .btn-primary{background:var(--amber); color:#0B0E14; border:none; padding:9px 17px; border-radius:7px; font-weight:600; font-size:13px;}
+  .btn-primary:hover{opacity:.88;} .btn-primary:disabled{opacity:.4;}
+
+  .receipt{background:var(--bg-input); border:1px solid var(--border); border-radius:8px; padding:15px 17px; margin-top:15px; max-width:420px;}
+  .receipt-row{display:flex; justify-content:space-between; padding:5px 0; font-size:12px; border-bottom:1px dashed var(--border-soft);}
+  .receipt-row:last-child{border-bottom:none;}
+  .receipt-row .k{color:var(--text-muted); font-family:'IBM Plex Mono',monospace;}
+  .receipt-row .v{font-family:'IBM Plex Mono',monospace; color:var(--text); font-weight:500;}
+  .receipt-row.total .v{color:var(--amber); font-size:13.5px;}
+  .fx-tag{font-size:10.5px; font-family:'IBM Plex Mono',monospace; padding:2px 7px; border-radius:100px; margin-left:6px;}
+  .fx-tag.live{color:var(--teal); background:rgba(94,234,212,.1); border:1px solid rgba(94,234,212,.3);}
+  .fx-tag.fallback{color:var(--red); background:rgba(232,99,90,.1); border:1px solid rgba(232,99,90,.3);}
+
+  .modal-overlay{display:none; position:fixed; inset:0; background:rgba(6,8,12,.7); backdrop-filter:blur(3px); z-index:100; align-items:flex-start; justify-content:center; padding:60px 20px; overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--bg-surface); border:1px solid var(--border); border-radius:12px; max-width:440px; width:100%; padding:24px; position:relative;}
+  .modal h3{margin:0 0 3px; font-size:16px;}
+  .modal .modal-sub{color:var(--text-muted); font-size:12px; margin:0 0 18px; font-family:'IBM Plex Mono',monospace;}
+  .modal-actions{display:flex; gap:9px; margin-top:16px;}
+  .btn-secondary{background:transparent; border:1px solid var(--border); color:var(--text); padding:9px 17px; border-radius:7px; font-weight:600; font-size:13px;}
+  .modal-close{position:absolute; top:16px; right:18px; background:none; border:none; color:var(--text-faint); font-size:17px;}
+
+  .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--bg-raised); border:1px solid var(--teal); color:var(--teal); padding:10px 18px; border-radius:8px; font-family:'IBM Plex Mono',monospace; font-size:12px; opacity:0; transition:all .25s; z-index:200;}
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  .toast.error{border-color:var(--red); color:var(--red);}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap header-inner">
+    <div class="logo">
+      <svg viewBox="0 0 22 22" fill="none"><circle cx="4" cy="11" r="3" stroke="#5EEAD4" stroke-width="1.6"/><circle cx="18" cy="11" r="3" stroke="#F2A65A" stroke-width="1.6"/><line x1="7" y1="11" x2="15" y2="11" stroke="#8B93A7" stroke-width="1.6" stroke-dasharray="1.5 2"/></svg>
+      FetchTalos Console
+    </div>
+    <div class="conn-bar">
+      <input id="baseUrlInput" placeholder="API base URL" value="http://localhost:3000">
+      <input id="apiKeyInput" placeholder="API key" value="ft_test_51x9k2mq7dev">
+      <button class="conn-btn" id="connectBtn">Connect</button>
+      <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connLabel">not connected</span></span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="banner">
+    This console hits a <b>real, running FetchTalos API</b> — not mock data. Point the base URL above
+    at <code>localhost:3000</code> to test locally, or at a deployed/ngrok URL to test remotely or hand
+    this to a friend. It sends real requests with your API key over <code>Authorization: Bearer</code>.
+  </div>
+
+  <div class="tabbar">
+    <button class="tabbtn active" data-panel="talent">Talent Pool</button>
+    <button class="tabbtn" data-panel="contracts">Contracts</button>
+    <button class="tabbtn" data-panel="payroll">Payroll</button>
+    <button class="tabbtn" data-panel="ledger">Ledger</button>
+  </div>
+
+  <main>
+    <section class="panel active" id="panel-talent">
+      <div class="panel-head"><h2>Talent pool</h2><p class="sub">GET /v1/talents/discover</p></div>
+      <div class="search-row">
+        <input class="search-input" id="talentSearch" placeholder="filter by skill (e.g. node, react)...">
+        <button class="row-btn" id="refreshTalentBtn">↻ Refresh</button>
+      </div>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Talent</th><th>Stack</th><th>Pipeline</th><th>Score</th><th>Status</th><th></th></tr></thead>
+        <tbody id="talentTableBody"><tr><td colspan="6" class="empty-state">// connect to load talent</td></tr></tbody></table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-contracts">
+      <div class="panel-head"><h2>Contracts</h2><p class="sub">GET /v1/contracts</p></div>
+      <button class="row-btn" id="refreshContractsBtn" style="margin-bottom:14px;">↻ Refresh</button>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Employer</th><th>Currency</th><th>Tax form</th><th>Status</th></tr></thead>
+        <tbody id="contractsTableBody"><tr><td colspan="6" class="empty-state">// connect to load contracts</td></tr></tbody></table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-payroll">
+      <div class="panel-head"><h2>Run payroll</h2><p class="sub">POST /v1/payroll/disburse — real FX conversion happens here</p></div>
+      <div class="field"><label>Active contract</label><select id="payrollContractSelect"><option value="">— connect to load —</option></select></div>
+      <div class="field"><label>Gross amount (in employer's currency)</label><input class="search-input" type="number" id="payrollAmount" placeholder="e.g. 2400"></div>
+      <button class="btn-primary" id="runPayrollBtn">Disburse</button>
+      <div id="payrollResult"></div>
+    </section>
+
+    <section class="panel" id="panel-ledger">
+      <div class="panel-head"><h2>Ledger</h2><p class="sub">GET /v1/ledger — live totals from every payout run against this API</p></div>
+      <button class="row-btn" id="refreshLedgerBtn" style="margin-bottom:14px;">↻ Refresh</button>
+      <div class="stat-strip">
+        <div class="stat-cell"><div class="l">PAYOUTS RUN</div><div class="v" id="statCount">—</div></div>
+        <div class="stat-cell"><div class="l">FETCHTALOS REVENUE (USD-EQUIV)</div><div class="v amber" id="statRevenue">—</div></div>
+        <div class="stat-cell"><div class="l">CARE WALLET FUNDED</div><div class="v teal" id="statWallet">—</div></div>
+        <div class="stat-cell"><div class="l">VOLUME BY CURRENCY</div><div class="v" id="statVolume" style="font-size:12px;">—</div></div>
+      </div>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Payout ID</th><th>Talent</th><th>Gross</th><th>Net (NGN)</th><th>FX rate</th><th>Status</th></tr></thead>
+        <tbody id="ledgerTableBody"><tr><td colspan="6" class="empty-state">// connect to load ledger</td></tr></tbody></table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal-overlay" id="contractModalOverlay">
+  <div class="modal">
+    <button class="modal-close" id="closeContractModal">✕</button>
+    <h3 id="contractModalTitle">Create contract</h3>
+    <p class="modal-sub">POST /v1/contracts/create</p>
+    <div class="field"><label>Employer country</label>
+      <select id="employerCountrySelect"><option value="US">United States</option><option value="UK">United Kingdom</option><option value="DE">Germany</option><option value="CA">Canada</option></select>
+    </div>
+    <div class="field"><label>Employer pays in</label>
+      <select id="employerCurrencySelect"><option value="USD">USD</option><option value="GBP">GBP</option><option value="EUR">EUR</option><option value="CAD">CAD</option></select>
+    </div>
+    <div class="field"><label>Coverage plan</label>
+      <select id="coveragePlanSelect"><option value="remote_contractor_basic">Basic</option><option value="remote_contractor_plus">Plus</option><option value="remote_contractor_family">Family</option></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-primary" id="generateContractBtn">Create contract</button>
+      <button class="btn-secondary" id="cancelContractBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+let API_KEY = document.getElementById('apiKeyInput').value;
+let pendingTalentId = null;
+let connected = false;
+
+function showToast(msg, isError=false){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+async function api(path, opts={}){
+  const res = await fetch(BASE_URL + path, {
+    ...opts,
+    headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + API_KEY, ...(opts.headers||{}) }
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok){ const err = new Error(data.message || data.error || `HTTP ${res.status}`); err.data = data; throw err; }
+  return data;
+}
+
+document.getElementById('connectBtn').onclick = async ()=>{
+  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+  API_KEY = document.getElementById('apiKeyInput').value;
+  try{
+    await fetch(BASE_URL + '/health').then(r=>{ if(!r.ok) throw new Error('unreachable'); });
+    await api('/v1/talents/discover'); // validates the key too
+    connected = true;
+    document.getElementById('connDot').className = 'conn-dot ok';
+    document.getElementById('connLabel').textContent = 'connected';
+    showToast('Connected to ' + BASE_URL);
+    renderTalent(); renderContracts(); renderLedger(); refreshPayrollSelect();
+  }catch(err){
+    connected = false;
+    document.getElementById('connDot').className = 'conn-dot bad';
+    document.getElementById('connLabel').textContent = 'failed — check URL/key';
+    showToast('Connection failed: ' + err.message, true);
+  }
+};
+
+/* TABS */
+document.querySelectorAll('.tabbtn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-'+btn.dataset.panel).classList.add('active');
+    if(btn.dataset.panel==='payroll') refreshPayrollSelect();
+  });
+});
+
+/* TALENT */
+async function renderTalent(){
+  if(!connected) return;
+  const skill = document.getElementById('talentSearch').value;
+  try{
+    const data = await api('/v1/talents/discover' + (skill ? `?skill=${encodeURIComponent(skill)}` : ''));
+    const tbody = document.getElementById('talentTableBody');
+    tbody.innerHTML = data.results.length ? data.results.map(t=>`
+      <tr><td><strong>${t.name}</strong><br><span style="color:var(--text-faint);font-family:'IBM Plex Mono',monospace;font-size:10px;">${t.talent_id}</span></td>
+      <td>${t.stack.map(s=>`<span class="stack-tag">${s}</span>`).join('')}</td>
+      <td style="color:var(--text-muted);">${t.pipeline}</td>
+      <td class="mono">${t.vetted_score}</td>
+      <td><span class="status-pill status-${t.status}">${t.status}</span></td>
+      <td><button class="row-btn" ${t.status!=='available'?'disabled':''} onclick="openContractModal('${t.talent_id}')">Create contract</button></td></tr>`).join('')
+      : `<tr><td colspan="6" class="empty-state">// no results</td></tr>`;
+  }catch(err){ showToast('Failed to load talent: ' + err.message, true); }
+}
+document.getElementById('talentSearch').addEventListener('input', renderTalent);
+document.getElementById('refreshTalentBtn').onclick = renderTalent;
+
+/* CONTRACT MODAL */
+function openContractModal(talentId){ pendingTalentId = talentId; document.getElementById('contractModalOverlay').classList.add('open'); }
+document.getElementById('closeContractModal').onclick = closeModal;
+document.getElementById('cancelContractBtn').onclick = closeModal;
+function closeModal(){ document.getElementById('contractModalOverlay').classList.remove('open'); pendingTalentId = null; }
+
+document.getElementById('generateContractBtn').onclick = async ()=>{
+  if(!pendingTalentId) return;
+  try{
+    await api('/v1/contracts/create', { method:'POST', body: JSON.stringify({
+      talent_id: pendingTalentId,
+      employer_country: document.getElementById('employerCountrySelect').value,
+      employer_currency: document.getElementById('employerCurrencySelect').value,
+      coverage_plan: document.getElementById('coveragePlanSelect').value
+    })});
+    showToast('Contract created');
+    closeModal(); renderTalent(); renderContracts();
+  }catch(err){ showToast('Contract creation failed: ' + err.message, true); }
+};
+
+/* CONTRACTS */
+async function renderContracts(){
+  if(!connected) return;
+  try{
+    const data = await api('/v1/contracts');
+    const tbody = document.getElementById('contractsTableBody');
+    tbody.innerHTML = data.results.length ? data.results.map(c=>`
+      <tr><td class="mono">${c.contract_id}</td><td>${c.talent_name}</td><td>${c.employer_country}</td>
+      <td class="mono">${c.employer_currency}</td><td class="mono" style="font-size:11px;">${c.tax_form}</td>
+      <td><span class="status-pill status-pending">${c.status}</span></td></tr>`).join('')
+      : `<tr><td colspan="6" class="empty-state">// no contracts yet</td></tr>`;
+  }catch(err){ showToast('Failed to load contracts: ' + err.message, true); }
+}
+document.getElementById('refreshContractsBtn').onclick = renderContracts;
+
+/* PAYROLL */
+async function refreshPayrollSelect(){
+  if(!connected) return;
+  try{
+    const data = await api('/v1/contracts');
+    const sel = document.getElementById('payrollContractSelect');
+    sel.innerHTML = data.results.length ? data.results.map(c=>`<option value="${c.contract_id}">${c.contract_id} — ${c.talent_name} (${c.employer_currency})</option>`).join('') : `<option value="">No contracts</option>`;
+  }catch(err){ /* silent on tab switch */ }
+}
+
+document.getElementById('runPayrollBtn').onclick = async ()=>{
+  const contract_id = document.getElementById('payrollContractSelect').value;
+  const amount = parseFloat(document.getElementById('payrollAmount').value);
+  if(!contract_id){ showToast('No contract selected', true); return; }
+  if(!amount || amount<=0){ showToast('Enter a valid amount', true); return; }
+  try{
+    const p = await api('/v1/payroll/disburse', { method:'POST', body: JSON.stringify({
+      contract_id, amount, idempotency_key: 'console-' + contract_id + '-' + Date.now()
+    })});
+    const fxTag = p.fx_source.startsWith('live') ? `<span class="fx-tag live">live rate</span>` : `<span class="fx-tag fallback">fallback rate</span>`;
+    document.getElementById('payrollResult').innerHTML = `
+      <div class="receipt">
+        <div class="receipt-row"><span class="k">payout_id</span><span class="v">${p.payout_id}</span></div>
+        <div class="receipt-row"><span class="k">fx_rate</span><span class="v">${p.fx_rate} ${fxTag}</span></div>
+        <div class="receipt-row"><span class="k">gross (${p.employer_currency})</span><span class="v">${p.gross_amount_employer_currency}</span></div>
+        <div class="receipt-row"><span class="k">net_to_talent_ngn</span><span class="v">₦${Number(p.net_amount_ngn).toLocaleString()}</span></div>
+        <div class="receipt-row"><span class="k">platform_fee</span><span class="v">${p.platform_fee}</span></div>
+        <div class="receipt-row"><span class="k">care_wallet_funded</span><span class="v">${p.care_wallet_funded}</span></div>
+        <div class="receipt-row total"><span class="k">employer_total_charged</span><span class="v">${p.employer_total_charged}</span></div>
+      </div>`;
+    showToast('Payroll settled');
+    document.getElementById('payrollAmount').value = '';
+    renderLedger();
+  }catch(err){ showToast('Disburse failed: ' + err.message, true); }
+};
+
+/* LEDGER */
+async function renderLedger(){
+  if(!connected) return;
+  try{
+    const data = await api('/v1/ledger');
+    document.getElementById('statCount').textContent = data.payout_count;
+    document.getElementById('statRevenue').textContent = '$' + data.total_revenue.toFixed(2);
+    document.getElementById('statWallet').textContent = '$' + data.total_care_wallet.toFixed(2);
+    document.getElementById('statVolume').textContent = Object.entries(data.total_volume_by_currency).map(([c,v])=>`${c} ${v.toFixed(0)}`).join(' · ') || '—';
+    const tbody = document.getElementById('ledgerTableBody');
+    tbody.innerHTML = data.payouts.length ? data.payouts.map(p=>`
+      <tr><td class="mono">${p.payout_id}</td><td>${p.talent_name}</td>
+      <td class="mono">${p.employer_currency} ${p.gross_amount_employer_currency}</td>
+      <td class="mono">₦${Number(p.net_amount_ngn).toLocaleString()}</td>
+      <td class="mono">${p.fx_rate}</td>
+      <td><span class="status-pill status-settled">${p.status}</span></td></tr>`).join('')
+      : `<tr><td colspan="6" class="empty-state">// no payouts yet</td></tr>`;
+  }catch(err){ showToast('Failed to load ledger: ' + err.message, true); }
+}
+document.getElementById('refreshLedgerBtn').onclick = renderLedger;
+</script>
+
+</body>
+</html>

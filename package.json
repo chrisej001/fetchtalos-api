@@ -1,0 +1,17 @@
+{
+  "name": "fetchtalos-api",
+  "version": "0.1.0",
+  "description": "FetchTalos — employer pays in USD/GBP/EUR/CAD, talent receives NGN. Talent discovery, contracts, and payroll with live FX conversion.",
+  "type": "module",
+  "main": "server.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}
