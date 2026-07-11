@@ -7,6 +7,42 @@ app.use(cors());
 app.use(express.json());
 
 /* ---------------------------------------------------------------------- *
+ * AUTH — Stripe/Paystack-style bearer key. This is the only thing
+ * standing between "anyone with the URL" and "creates real payouts" once
+ * this is deployed, so it's on every route except /health.
+ * Set FETCHTALOS_API_KEY as an env var in production. The value below is
+ * a dev default ONLY — change it before you deploy anywhere public.
+ * ---------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- *
+ * AUTH — Stripe/Paystack-style bearer key. Supports multiple keys, each
+ * tagged to a client_id, so different testers/apps don't see each other's
+ * contracts and payouts. The talent pool stays shared (that's realistic —
+ * it's a marketplace everyone hires from), but a client only ever sees
+ * their OWN contracts, payouts, and ledger.
+ *
+ * Set FETCHTALOS_API_KEYS as a comma-separated "key:client_id" list in
+ * production, e.g: FETCHTALOS_API_KEYS=ft_live_abc:chris,ft_live_xyz:tobi_lovable
+ * ---------------------------------------------------------------------- */
+const DEFAULT_KEYS = {
+  'ft_test_51x9k2mq7dev': 'dev',
+  'ft_live_9x2kq7mZp4vRw': 'chris_console'
+};
+const KEYS = process.env.FETCHTALOS_API_KEYS
+  ? Object.fromEntries(process.env.FETCHTALOS_API_KEYS.split(',').map(pair => pair.split(':')))
+  : DEFAULT_KEYS;
+
+function requireApiKey(req, res, next) {
+  const header = req.headers.authorization || '';
+  const key = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const clientId = key && KEYS[key];
+  if (!clientId) {
+    return res.status(401).json({ error: 'unauthorized', message: 'Pass a valid key as: Authorization: Bearer <key>' });
+  }
+  req.clientId = clientId; // every route below can now scope data to this
+  next();
+}
+
+/* ---------------------------------------------------------------------- *
  * IN-MEMORY STORE
  * Swap this for Postgres/whatever once this stops being a prototype.
  * Shape matches openapi.yaml exactly.
@@ -51,8 +87,10 @@ async function getNgnRate(employerCurrency) {
 }
 
 /* ---------------------------------------------------------------------- *
- * ROUTES
+ * ROUTES — everything under /v1 requires the API key. /health does not,
+ * so uptime monitors and load balancers can hit it without a key.
  * ---------------------------------------------------------------------- */
+app.use('/v1', requireApiKey);
 
 // GET /v1/talents/discover
 app.get('/v1/talents/discover', (req, res) => {
@@ -75,6 +113,7 @@ app.post('/v1/contracts/create', (req, res) => {
   const contract_id = id('ctr');
   const contract = {
     contract_id,
+    client_id: req.clientId, // scopes this contract to whoever's key created it
     talent_id,
     talent_name: talent.name,
     employer_country,
@@ -95,13 +134,14 @@ app.post('/v1/contracts/create', (req, res) => {
 // GET /v1/contracts/:id
 app.get('/v1/contracts/:id', (req, res) => {
   const contract = db.contracts.get(req.params.id);
-  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
   res.json(contract);
 });
 
-// GET /v1/contracts  (list — not in original spec but the console needs it)
+// GET /v1/contracts  (list — scoped to the requesting client only)
 app.get('/v1/contracts', (req, res) => {
-  res.json({ count: db.contracts.size, results: [...db.contracts.values()] });
+  const mine = [...db.contracts.values()].filter(c => c.client_id === req.clientId);
+  res.json({ count: mine.length, results: mine });
 });
 
 // POST /v1/payroll/disburse
@@ -115,11 +155,11 @@ app.post('/v1/payroll/disburse', async (req, res) => {
   }
 
   const contract = db.contracts.get(contract_id);
-  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
 
-  // idempotency: if this key was already processed, return the original result
+  // idempotency: if this key was already processed BY THIS CLIENT, return the original result
   if (idempotency_key) {
-    const existing = [...db.payouts.values()].find(p => p.idempotency_key === idempotency_key);
+    const existing = [...db.payouts.values()].find(p => p.idempotency_key === idempotency_key && p.client_id === req.clientId);
     if (existing) return res.status(200).json({ ...existing, replayed: true });
   }
 
@@ -141,6 +181,7 @@ app.post('/v1/payroll/disburse', async (req, res) => {
   const payout_id = id('pay');
   const payout = {
     payout_id,
+    client_id: req.clientId,
     contract_id,
     talent_name: contract.talent_name,
     employer_currency: employerCurrency,
@@ -165,13 +206,13 @@ app.post('/v1/payroll/disburse', async (req, res) => {
 // GET /v1/payroll/:id
 app.get('/v1/payroll/:id', (req, res) => {
   const payout = db.payouts.get(req.params.id);
-  if (!payout) return res.status(404).json({ error: 'payout_not_found' });
+  if (!payout || payout.client_id !== req.clientId) return res.status(404).json({ error: 'payout_not_found' });
   res.json(payout);
 });
 
-// GET /v1/ledger — aggregate view, powers the console's wallet tab
+// GET /v1/ledger — aggregate view, scoped to the requesting client only
 app.get('/v1/ledger', (req, res) => {
-  const payouts = [...db.payouts.values()];
+  const payouts = [...db.payouts.values()].filter(p => p.client_id === req.clientId);
   const totals = payouts.reduce((acc, p) => {
     acc.total_volume_by_currency[p.employer_currency] = (acc.total_volume_by_currency[p.employer_currency] || 0) + p.gross_amount_employer_currency;
     acc.total_revenue += p.fetchtalos_revenue;
