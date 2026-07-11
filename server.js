@@ -7,13 +7,6 @@ app.use(cors());
 app.use(express.json());
 
 /* ---------------------------------------------------------------------- *
- * AUTH — Stripe/Paystack-style bearer key. This is the only thing
- * standing between "anyone with the URL" and "creates real payouts" once
- * this is deployed, so it's on every route except /health.
- * Set FETCHTALOS_API_KEY as an env var in production. The value below is
- * a dev default ONLY — change it before you deploy anywhere public.
- * ---------------------------------------------------------------------- */
-/* ---------------------------------------------------------------------- *
  * AUTH — Stripe/Paystack-style bearer key. Supports multiple keys, each
  * tagged to a client_id, so different testers/apps don't see each other's
  * contracts and payouts. The talent pool stays shared (that's realistic —
@@ -85,6 +78,72 @@ async function getNgnRate(employerCurrency) {
     return { rate: fallback, source: `fallback (live FX unavailable: ${err.message})` };
   }
 }
+
+/* ---------------------------------------------------------------------- *
+ * ADMIN — this is how YOU see everything across every client, and how new
+ * client keys get created WITHOUT hand-editing Render's env vars every
+ * time. Protected by a separate admin key so it's not exposed alongside
+ * regular client keys.
+ *
+ * Set FETCHTALOS_ADMIN_KEY as its own env var — pick something long and
+ * different from any client key. Keep it private; anyone with it can see
+ * every client's data and mint new keys.
+ * ---------------------------------------------------------------------- */
+const ADMIN_KEY = process.env.FETCHTALOS_ADMIN_KEY || 'ft_admin_dev_change_me';
+
+function requireAdminKey(req, res, next) {
+  const header = req.headers.authorization || '';
+  const key = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!key || key !== ADMIN_KEY) {
+    return res.status(401).json({ error: 'unauthorized', message: 'Admin routes need Authorization: Bearer <admin key>' });
+  }
+  next();
+}
+
+// POST /admin/keys — create a new client key without touching Render at all.
+// NOTE: new keys created this way live only in memory — they're gone on the
+// next deploy/restart, same as all other data right now. Fine for spinning
+// up a tester for a day; not a substitute for real persistent storage once
+// you have people you don't want to re-onboard after every deploy.
+app.post('/admin/keys', requireAdminKey, (req, res) => {
+  const { client_id } = req.body || {};
+  if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+  const newKey = `ft_live_${crypto.randomBytes(9).toString('hex')}`;
+  KEYS[newKey] = client_id;
+  res.status(201).json({ api_key: newKey, client_id });
+});
+
+// GET /admin/keys — list every client and their key (masked, so this is
+// safe-ish to glance at, but the route itself is still admin-only).
+app.get('/admin/keys', requireAdminKey, (req, res) => {
+  const list = Object.entries(KEYS).map(([key, clientId]) => ({
+    client_id: clientId,
+    key_preview: key.slice(0, 12) + '…' + key.slice(-4)
+  }));
+  res.json({ count: list.length, results: list });
+});
+
+// GET /admin/overview — see EVERYTHING across EVERY client at once. This is
+// your answer to "where do I see what's going on in Tobi vs. the console" —
+// without this, you'd have to manually swap keys in the regular console to
+// peek at one client at a time.
+app.get('/admin/overview', requireAdminKey, (req, res) => {
+  const byClient = {};
+  for (const clientId of new Set(Object.values(KEYS))) {
+    byClient[clientId] = { contracts: 0, payouts: 0, revenue: 0, volume_by_currency: {} };
+  }
+  for (const c of db.contracts.values()) {
+    if (byClient[c.client_id]) byClient[c.client_id].contracts++;
+  }
+  for (const p of db.payouts.values()) {
+    if (!byClient[p.client_id]) continue;
+    byClient[p.client_id].payouts++;
+    byClient[p.client_id].revenue += p.fetchtalos_revenue;
+    byClient[p.client_id].volume_by_currency[p.employer_currency] =
+      (byClient[p.client_id].volume_by_currency[p.employer_currency] || 0) + p.gross_amount_employer_currency;
+  }
+  res.json({ clients: byClient, total_clients: Object.keys(byClient).length });
+});
 
 /* ---------------------------------------------------------------------- *
  * ROUTES — everything under /v1 requires the API key. /health does not,
