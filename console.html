@@ -248,6 +248,8 @@ async function doConnect(){
     connected = false;
     document.getElementById('connDot').className = 'conn-dot bad';
     document.getElementById('connLabel').textContent = 'failed — check URL/key';
+    showToast('Connection failed: ' + err.message, true);
+  }
 }
 // Auto-connect on load so friends opening this link see it working immediately, no clicking required.
 window.addEventListener('DOMContentLoaded', doConnect);
