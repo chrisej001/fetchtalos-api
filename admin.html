@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FetchTalos Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-base:#0B0E14; --bg-surface:#12161F; --bg-raised:#1A202C; --bg-input:#0D1017;
+    --border:#232B39; --border-soft:#1D2430;
+    --amber:#F2A65A; --teal:#5EEAD4; --red:#E8635A; --purple:#C4A2F0;
+    --text:#EDEFF3; --text-muted:#8B93A7; --text-faint:#525C6E;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--bg-base); color:var(--text); font-family:'Inter',sans-serif;}
+  h1,h2,h3{font-family:'Space Grotesk',sans-serif;}
+  code,.mono{font-family:'IBM Plex Mono',monospace;}
+  button{font-family:inherit; cursor:pointer;}
+  .wrap{max-width:1140px; margin:0 auto; padding:0 24px;}
+
+  header{border-bottom:1px solid var(--border-soft); padding:16px 0; position:sticky; top:0; background:rgba(11,14,20,.92); backdrop-filter:blur(8px); z-index:40;}
+  .header-inner{display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;}
+  .logo{display:flex; align-items:center; gap:9px; font-weight:600; font-size:15px;}
+  .logo svg{width:19px; height:19px;}
+  .admin-badge{font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--red); background:rgba(232,99,90,.1); border:1px solid rgba(232,99,90,.3); padding:2px 8px; border-radius:100px; margin-left:6px;}
+  .conn-bar{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+  .conn-bar input{background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:7px 10px; border-radius:6px; font-size:12px; font-family:'IBM Plex Mono',monospace;}
+  #baseUrlInput{width:220px;} #adminKeyInput{width:200px;}
+  .conn-btn{background:var(--amber); color:#0B0E14; border:none; padding:7px 14px; border-radius:6px; font-weight:600; font-size:12px;}
+  .conn-status{display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:11px;}
+  .conn-dot{width:7px; height:7px; border-radius:50%; background:var(--text-faint);}
+  .conn-dot.ok{background:var(--teal); box-shadow:0 0 6px var(--teal);}
+  .conn-dot.bad{background:var(--red);}
+
+  .banner{background:rgba(232,99,90,.06); border:1px solid rgba(232,99,90,.2); border-radius:8px; padding:10px 14px; margin:16px 0; font-size:12.5px; color:var(--text-muted); line-height:1.6;}
+  .banner b{color:var(--red);}
+
+  .tabbar{display:flex; gap:2px; margin:18px 0 0; border-bottom:1px solid var(--border-soft); overflow-x:auto;}
+  .tabbtn{background:none; border:none; padding:10px 15px; font-size:13px; font-weight:500; color:var(--text-faint); border-bottom:2px solid transparent; white-space:nowrap;}
+  .tabbtn.active{color:var(--text); border-bottom-color:var(--amber);}
+  main{padding:22px 0 70px;}
+  .panel{display:none;} .panel.active{display:block;}
+  .panel-head{margin-bottom:16px;}
+  .panel-head h2{font-size:17px; margin:0 0 3px;}
+  .panel-head .sub{font-size:12.5px; color:var(--text-muted); margin:0; font-family:'IBM Plex Mono',monospace;}
+
+  .card-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:14px; margin-bottom:10px;}
+  .client-card{background:var(--bg-surface); border:1px solid var(--border); border-radius:10px; padding:18px;}
+  .client-card .top{display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;}
+  .client-card h3{font-size:15px; margin:0;}
+  .type-pill{font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 8px; border-radius:100px;}
+  .type-pill.enterprise{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
+  .type-pill.hub{background:rgba(196,162,240,.1); color:var(--purple); border:1px solid rgba(196,162,240,.3);}
+  .hub-scope-tag{font-size:11px; color:var(--text-faint); font-family:'IBM Plex Mono',monospace; margin-bottom:10px;}
+  .client-stats{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+  .client-stat{background:var(--bg-input); border-radius:6px; padding:8px 10px;}
+  .client-stat .l{font-size:9.5px; color:var(--text-faint); font-family:'IBM Plex Mono',monospace; margin-bottom:3px;}
+  .client-stat .v{font-family:'Space Grotesk',sans-serif; font-size:15px; font-weight:600;}
+
+  .tbl-wrap{border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--bg-surface);}
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  th{text-align:left; padding:10px 13px; font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--border); background:var(--bg-raised);}
+  td{padding:11px 13px; border-bottom:1px solid var(--border-soft); vertical-align:middle;}
+  tr:last-child td{border-bottom:none;}
+  .stack-tag{display:inline-block; background:var(--bg-raised); border:1px solid var(--border); color:var(--text-muted); font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 6px; border-radius:5px; margin:1px 2px 1px 0;}
+  .status-pill{font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 8px; border-radius:100px; display:inline-block;}
+  .status-available{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
+  .status-engaged{background:rgba(242,166,90,.1); color:var(--amber); border:1px solid rgba(242,166,90,.3);}
+  .empty-state{padding:34px 20px; text-align:center; color:var(--text-faint); font-size:12.5px; font-family:'IBM Plex Mono',monospace;}
+
+  .form-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px; max-width:640px; margin-bottom:18px;}
+  @media(max-width:600px){.form-grid{grid-template-columns:1fr;}}
+  .field label{display:block; font-size:11.5px; color:var(--text-muted); margin-bottom:5px; font-family:'IBM Plex Mono',monospace;}
+  .field input, .field select{width:100%; background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:8px 11px; border-radius:7px; font-size:12.5px; font-family:'Inter',sans-serif;}
+  .btn-primary{background:var(--amber); color:#0B0E14; border:none; padding:9px 17px; border-radius:7px; font-weight:600; font-size:13px;}
+  .btn-primary:hover{opacity:.88;}
+  .row-btn{background:var(--bg-raised); border:1px solid var(--border); color:var(--text); font-size:11.5px; padding:5px 11px; border-radius:6px;}
+  .row-btn:hover{border-color:var(--amber);}
+
+  .result-box{background:var(--bg-input); border:1px solid var(--teal); border-radius:8px; padding:14px 16px; margin-top:14px; max-width:640px; font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--text-muted); word-break:break-all;}
+  .result-box .k{color:var(--teal);}
+  .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--bg-raised); border:1px solid var(--teal); color:var(--teal); padding:10px 18px; border-radius:8px; font-family:'IBM Plex Mono',monospace; font-size:12px; opacity:0; transition:all .25s; z-index:200;}
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  .toast.error{border-color:var(--red); color:var(--red);}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap header-inner">
+    <div class="logo">
+      <svg viewBox="0 0 22 22" fill="none"><circle cx="4" cy="11" r="3" stroke="#5EEAD4" stroke-width="1.6"/><circle cx="18" cy="11" r="3" stroke="#F2A65A" stroke-width="1.6"/><line x1="7" y1="11" x2="15" y2="11" stroke="#8B93A7" stroke-width="1.6" stroke-dasharray="1.5 2"/></svg>
+      FetchTalos <span class="admin-badge">ADMIN</span>
+    </div>
+    <div class="conn-bar">
+      <input id="baseUrlInput" placeholder="API base URL" value="https://fetchtalos.onrender.com">
+      <input id="adminKeyInput" placeholder="Admin key" type="password">
+      <button class="conn-btn" id="connectBtn">Connect</button>
+      <span class="conn-status"><span class="conn-dot" id="connDot"></span><span id="connLabel">not connected</span></span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="banner">
+    <b>Admin-only.</b> This page uses your <code>FETCHTALOS_ADMIN_KEY</code> — it can see every
+    client's data and mint new keys. Don't share this page or the key with anyone outside your
+    own use.
+  </div>
+
+  <div class="tabbar">
+    <button class="tabbtn active" data-panel="overview">Overview</button>
+    <button class="tabbtn" data-panel="keys">Clients &amp; Keys</button>
+    <button class="tabbtn" data-panel="talents">Talent Management</button>
+  </div>
+
+  <main>
+    <section class="panel active" id="panel-overview">
+      <div class="panel-head"><h2>Cross-client overview</h2><p class="sub">GET /admin/overview — everyone, side by side</p></div>
+      <button class="row-btn" id="refreshOverviewBtn" style="margin-bottom:16px;">↻ Refresh</button>
+      <div class="card-grid" id="overviewCards"><div class="empty-state">// connect to load</div></div>
+    </section>
+
+    <section class="panel" id="panel-keys">
+      <div class="panel-head"><h2>Create a new client key</h2><p class="sub">POST /admin/keys</p></div>
+      <div class="form-grid">
+        <div class="field"><label>Client ID (a name for this tester/app)</label><input id="newClientId" placeholder="e.g. nithub_portal"></div>
+        <div class="field"><label>Type</label>
+          <select id="newClientType">
+            <option value="enterprise">Enterprise (sees full talent pool — direct API user)</option>
+            <option value="hub">Hub (locked to one pipeline — white-label alumni portal)</option>
+          </select>
+        </div>
+        <div class="field" id="hubScopeField" style="display:none;">
+          <label>Hub scope (pipeline name — must match exactly)</label>
+          <input id="newHubScope" placeholder="e.g. ALX Africa">
+        </div>
+      </div>
+      <button class="btn-primary" id="createKeyBtn">Create key</button>
+      <div id="newKeyResult"></div>
+
+      <div class="panel-head" style="margin-top:34px;"><h2>All clients</h2><p class="sub">GET /admin/keys</p></div>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Client ID</th><th>Type</th><th>Hub scope</th><th>Key preview</th></tr></thead>
+        <tbody id="keysTableBody"><tr><td colspan="4" class="empty-state">// connect to load</td></tr></tbody></table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-talents">
+      <div class="panel-head"><h2>Add a talent</h2><p class="sub">POST /admin/talents</p></div>
+      <div class="form-grid">
+        <div class="field"><label>Name</label><input id="talentName" placeholder="e.g. Bola S."></div>
+        <div class="field"><label>Pipeline (which hub they belong to)</label><input id="talentPipeline" placeholder="e.g. ALX Africa"></div>
+        <div class="field"><label>Country</label><input id="talentCountry" placeholder="e.g. NG"></div>
+        <div class="field"><label>Vetted score (0-100)</label><input id="talentScore" type="number" placeholder="e.g. 88"></div>
+        <div class="field" style="grid-column:1/-1;"><label>Stack (comma-separated)</label><input id="talentStack" placeholder="e.g. React, Node, PostgreSQL"></div>
+      </div>
+      <button class="btn-primary" id="addTalentBtn">Add talent</button>
+      <div id="addTalentResult"></div>
+
+      <div class="panel-head" style="margin-top:34px;"><h2>Full talent pool</h2><p class="sub">GET /admin/talents — unfiltered, includes engaged</p></div>
+      <button class="row-btn" id="refreshTalentsBtn" style="margin-bottom:14px;">↻ Refresh</button>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Talent</th><th>Stack</th><th>Pipeline</th><th>Country</th><th>Score</th><th>Status</th></tr></thead>
+        <tbody id="talentsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+let ADMIN_KEY = '';
+let connected = false;
+
+function showToast(msg, isError=false){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+async function api(path, opts={}){
+  const res = await fetch(BASE_URL + path, {
+    ...opts,
+    headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + ADMIN_KEY, ...(opts.headers||{}) }
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok){ const err = new Error(data.message || data.error || `HTTP ${res.status}`); err.data = data; throw err; }
+  return data;
+}
+
+document.getElementById('connectBtn').onclick = async ()=>{
+  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+  ADMIN_KEY = document.getElementById('adminKeyInput').value;
+  try{
+    await api('/admin/overview');
+    connected = true;
+    document.getElementById('connDot').className = 'conn-dot ok';
+    document.getElementById('connLabel').textContent = 'connected';
+    showToast('Connected');
+    loadOverview(); loadKeys(); loadTalents();
+  }catch(err){
+    connected = false;
+    document.getElementById('connDot').className = 'conn-dot bad';
+    document.getElementById('connLabel').textContent = 'failed';
+    showToast('Connection failed: ' + err.message, true);
+  }
+};
+
+document.querySelectorAll('.tabbtn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-'+btn.dataset.panel).classList.add('active');
+  });
+});
+
+document.getElementById('newClientType').addEventListener('change', (e)=>{
+  document.getElementById('hubScopeField').style.display = e.target.value === 'hub' ? 'block' : 'none';
+});
+
+async function loadOverview(){
+  if(!connected) return;
+  try{
+    const data = await api('/admin/overview');
+    const container = document.getElementById('overviewCards');
+    const entries = Object.entries(data.clients);
+    container.innerHTML = entries.length ? entries.map(([clientId, c])=>`
+      <div class="client-card">
+        <div class="top">
+          <h3>${clientId}</h3>
+          <span class="type-pill ${c.type}">${c.type}</span>
+        </div>
+        ${c.hub_scope ? `<div class="hub-scope-tag">scoped to: ${c.hub_scope}</div>` : ''}
+        <div class="client-stats">
+          <div class="client-stat"><div class="l">CONTRACTS</div><div class="v">${c.contracts}</div></div>
+          <div class="client-stat"><div class="l">PAYOUTS</div><div class="v">${c.payouts}</div></div>
+          <div class="client-stat"><div class="l">REVENUE</div><div class="v" style="color:var(--amber);">$${c.revenue.toFixed(2)}</div></div>
+          <div class="client-stat"><div class="l">VOLUME</div><div class="v" style="font-size:11px;">${Object.entries(c.volume_by_currency).map(([cur,v])=>`${cur} ${v.toFixed(0)}`).join(', ') || '—'}</div></div>
+        </div>
+      </div>`).join('') : `<div class="empty-state">// no clients yet</div>`;
+  }catch(err){ showToast('Failed to load overview: ' + err.message, true); }
+}
+document.getElementById('refreshOverviewBtn').onclick = loadOverview;
+
+async function loadKeys(){
+  if(!connected) return;
+  try{
+    const data = await api('/admin/keys');
+    const tbody = document.getElementById('keysTableBody');
+    tbody.innerHTML = data.results.length ? data.results.map(k=>`
+      <tr><td><strong>${k.client_id}</strong></td>
+      <td><span class="type-pill ${k.type}">${k.type}</span></td>
+      <td class="mono" style="font-size:11px;">${k.hub_scope || '—'}</td>
+      <td class="mono" style="font-size:11px; color:var(--text-faint);">${k.key_preview}</td></tr>`).join('')
+      : `<tr><td colspan="4" class="empty-state">// no clients yet</td></tr>`;
+  }catch(err){ showToast('Failed to load keys: ' + err.message, true); }
+}
+
+document.getElementById('createKeyBtn').onclick = async ()=>{
+  const client_id = document.getElementById('newClientId').value.trim();
+  const type = document.getElementById('newClientType').value;
+  const hub_scope = document.getElementById('newHubScope').value.trim();
+  if(!client_id){ showToast('Client ID is required', true); return; }
+  if(type === 'hub' && !hub_scope){ showToast('Hub scope is required for hub-type keys', true); return; }
+  try{
+    const result = await api('/admin/keys', { method:'POST', body: JSON.stringify({ client_id, type, hub_scope: type === 'hub' ? hub_scope : null }) });
+    document.getElementById('newKeyResult').innerHTML = `
+      <div class="result-box">
+        <div><span class="k">api_key:</span> ${result.api_key}</div>
+        <div><span class="k">client_id:</span> ${result.client_id}</div>
+        <div><span class="k">type:</span> ${result.type}</div>
+        ${result.hub_scope ? `<div><span class="k">hub_scope:</span> ${result.hub_scope}</div>` : ''}
+      </div>`;
+    showToast('Key created — copy it now, shown only once');
+    document.getElementById('newClientId').value = '';
+    document.getElementById('newHubScope').value = '';
+    loadKeys(); loadOverview();
+  }catch(err){ showToast('Failed to create key: ' + err.message, true); }
+};
+
+async function loadTalents(){
+  if(!connected) return;
+  try{
+    const data = await api('/admin/talents');
+    const tbody = document.getElementById('talentsTableBody');
+    tbody.innerHTML = data.results.length ? data.results.map(t=>`
+      <tr><td><strong>${t.name}</strong><br><span style="color:var(--text-faint);font-family:'IBM Plex Mono',monospace;font-size:10px;">${t.talent_id}</span></td>
+      <td>${t.stack.map(s=>`<span class="stack-tag">${s}</span>`).join('')}</td>
+      <td style="color:var(--text-muted);">${t.pipeline}</td>
+      <td class="mono">${t.country}</td>
+      <td class="mono">${t.vetted_score}</td>
+      <td><span class="status-pill status-${t.status}">${t.status}</span></td></tr>`).join('')
+      : `<tr><td colspan="6" class="empty-state">// no talent yet</td></tr>`;
+  }catch(err){ showToast('Failed to load talents: ' + err.message, true); }
+}
+document.getElementById('refreshTalentsBtn').onclick = loadTalents;
+
+document.getElementById('addTalentBtn').onclick = async ()=>{
+  const name = document.getElementById('talentName').value.trim();
+  const pipeline = document.getElementById('talentPipeline').value.trim();
+  const country = document.getElementById('talentCountry').value.trim();
+  const vetted_score = document.getElementById('talentScore').value;
+  const stack = document.getElementById('talentStack').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!name || !pipeline || !country){ showToast('Name, pipeline, and country are required', true); return; }
+  try{
+    const talent = await api('/admin/talents', { method:'POST', body: JSON.stringify({ name, pipeline, country, vetted_score, stack }) });
+    document.getElementById('addTalentResult').innerHTML = `<div class="result-box"><span class="k">created:</span> ${talent.name} (${talent.talent_id})</div>`;
+    showToast('Talent added');
+    ['talentName','talentPipeline','talentCountry','talentScore','talentStack'].forEach(id=>document.getElementById(id).value='');
+    loadTalents();
+  }catch(err){ showToast('Failed to add talent: ' + err.message, true); }
+};
+</script>
+
+</body>
+</html>

@@ -7,31 +7,48 @@ app.use(cors());
 app.use(express.json());
 
 /* ---------------------------------------------------------------------- *
- * AUTH — Stripe/Paystack-style bearer key. Supports multiple keys, each
- * tagged to a client_id, so different testers/apps don't see each other's
- * contracts and payouts. The talent pool stays shared (that's realistic —
- * it's a marketplace everyone hires from), but a client only ever sees
- * their OWN contracts, payouts, and ledger.
+ * AUTH — Stripe/Paystack-style bearer key. Two key TYPES now exist:
  *
- * Set FETCHTALOS_API_KEYS as a comma-separated "key:client_id" list in
- * production, e.g: FETCHTALOS_API_KEYS=ft_live_abc:chris,ft_live_xyz:tobi_lovable
+ * - "enterprise" — sees the FULL shared talent pool (this is Tobi's type).
+ *   Direct API usage: an employer discovering/hiring/paying across all
+ *   pipelines.
+ *
+ * - "hub" — locked to ONE pipeline via hub_scope. A hub's white-labeled
+ *   alumni page only ever shows ITS OWN graduates, never another hub's.
+ *   This is what makes "visit ALX's alumni page" different from "visit
+ *   Nithub's alumni page" even though both sit on the same API.
+ *
+ * Contracts/payouts/ledger stay scoped to client_id exactly as before,
+ * regardless of type — a hub's own hiring activity (if any) is still
+ * private to the hub.
+ *
+ * Set FETCHTALOS_API_KEYS as a comma-separated "key:client_id" list for
+ * simple enterprise keys (back-compat). Hub keys and richer metadata are
+ * created via POST /admin/keys instead — see below.
  * ---------------------------------------------------------------------- */
 const DEFAULT_KEYS = {
-  'ft_test_51x9k2mq7dev': 'dev',
-  'ft_live_9x2kq7mZp4vRw': 'chris_console'
+  'ft_test_51x9k2mq7dev': { client_id: 'dev', type: 'enterprise', hub_scope: null },
+  'ft_live_9x2kq7mZp4vRw': { client_id: 'chris_console', type: 'enterprise', hub_scope: null }
 };
 const KEYS = process.env.FETCHTALOS_API_KEYS
-  ? Object.fromEntries(process.env.FETCHTALOS_API_KEYS.split(',').map(pair => pair.split(':')))
+  ? Object.fromEntries(
+      process.env.FETCHTALOS_API_KEYS.split(',').map(pair => {
+        const [key, clientId] = pair.split(':');
+        return [key, { client_id: clientId, type: 'enterprise', hub_scope: null }];
+      })
+    )
   : DEFAULT_KEYS;
 
 function requireApiKey(req, res, next) {
   const header = req.headers.authorization || '';
   const key = header.startsWith('Bearer ') ? header.slice(7) : null;
-  const clientId = key && KEYS[key];
-  if (!clientId) {
+  const record = key && KEYS[key];
+  if (!record) {
     return res.status(401).json({ error: 'unauthorized', message: 'Pass a valid key as: Authorization: Bearer <key>' });
   }
-  req.clientId = clientId; // every route below can now scope data to this
+  req.clientId = record.client_id;
+  req.clientType = record.type;
+  req.hubScope = record.hub_scope; // null for enterprise keys, a pipeline name for hub keys
   next();
 }
 
@@ -101,26 +118,62 @@ function requireAdminKey(req, res, next) {
 }
 
 // POST /admin/keys — create a new client key without touching Render at all.
+// Body: { client_id, type: "enterprise" | "hub", hub_scope: "ALX Africa" }
+// hub_scope is REQUIRED when type is "hub" — it's what locks that key's
+// talent discovery down to one pipeline. Omit type to default to "enterprise".
 // NOTE: new keys created this way live only in memory — they're gone on the
 // next deploy/restart, same as all other data right now. Fine for spinning
 // up a tester for a day; not a substitute for real persistent storage once
 // you have people you don't want to re-onboard after every deploy.
 app.post('/admin/keys', requireAdminKey, (req, res) => {
-  const { client_id } = req.body || {};
+  const { client_id, type = 'enterprise', hub_scope = null } = req.body || {};
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+  if (!['enterprise', 'hub'].includes(type)) return res.status(400).json({ error: 'type must be "enterprise" or "hub"' });
+  if (type === 'hub' && !hub_scope) return res.status(400).json({ error: 'hub_scope is required when type is "hub"' });
+
   const newKey = `ft_live_${crypto.randomBytes(9).toString('hex')}`;
-  KEYS[newKey] = client_id;
-  res.status(201).json({ api_key: newKey, client_id });
+  KEYS[newKey] = { client_id, type, hub_scope: type === 'hub' ? hub_scope : null };
+  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope });
 });
 
-// GET /admin/keys — list every client and their key (masked, so this is
-// safe-ish to glance at, but the route itself is still admin-only).
+// GET /admin/keys — list every client, their type/scope, and their key (masked).
 app.get('/admin/keys', requireAdminKey, (req, res) => {
-  const list = Object.entries(KEYS).map(([key, clientId]) => ({
-    client_id: clientId,
+  const list = Object.entries(KEYS).map(([key, r]) => ({
+    client_id: r.client_id,
+    type: r.type,
+    hub_scope: r.hub_scope,
     key_preview: key.slice(0, 12) + '…' + key.slice(-4)
   }));
   res.json({ count: list.length, results: list });
+});
+
+// POST /admin/talents — add a new talent to the pool. This is how new
+// pipeline graduates actually get into FetchTalos — right now it's you
+// calling this by hand; a hub's own onboarding flow would call it too,
+// eventually.
+app.post('/admin/talents', requireAdminKey, (req, res) => {
+  const { name, stack, pipeline, country, vetted_score } = req.body || {};
+  if (!name || !pipeline || !country) {
+    return res.status(400).json({ error: 'name, pipeline, and country are required' });
+  }
+  const talent = {
+    talent_id: id('tal'),
+    name,
+    stack: Array.isArray(stack) ? stack : [],
+    pipeline,
+    country,
+    vetted_score: Number(vetted_score) || 75,
+    status: 'available'
+  };
+  db.talents.push(talent);
+  res.status(201).json(talent);
+});
+
+// GET /admin/talents — full unfiltered talent list, admin view (includes
+// engaged talent, which the normal discover endpoint still shows too, but
+// this is the canonical "everything" list for management purposes).
+app.get('/admin/talents', requireAdminKey, (req, res) => {
+  res.json({ count: db.talents.length, results: db.talents });
 });
 
 // GET /admin/overview — see EVERYTHING across EVERY client at once. This is
@@ -129,8 +182,10 @@ app.get('/admin/keys', requireAdminKey, (req, res) => {
 // peek at one client at a time.
 app.get('/admin/overview', requireAdminKey, (req, res) => {
   const byClient = {};
-  for (const clientId of new Set(Object.values(KEYS))) {
-    byClient[clientId] = { contracts: 0, payouts: 0, revenue: 0, volume_by_currency: {} };
+  for (const record of Object.values(KEYS)) {
+    if (!byClient[record.client_id]) {
+      byClient[record.client_id] = { type: record.type, hub_scope: record.hub_scope, contracts: 0, payouts: 0, revenue: 0, volume_by_currency: {} };
+    }
   }
   for (const c of db.contracts.values()) {
     if (byClient[c.client_id]) byClient[c.client_id].contracts++;
@@ -155,10 +210,18 @@ app.use('/v1', requireApiKey);
 app.get('/v1/talents/discover', (req, res) => {
   const { skill, region, status } = req.query;
   let results = db.talents;
+
+  // HUB SCOPING — the core of the white-label behavior. A hub-type key only
+  // ever sees its own pipeline's talent, regardless of what query params are
+  // passed. An enterprise key (like Tobi's) sees everyone, as before.
+  if (req.hubScope) {
+    results = results.filter(t => t.pipeline === req.hubScope);
+  }
+
   if (skill) results = results.filter(t => t.stack.some(s => s.toLowerCase().includes(String(skill).toLowerCase())));
   if (status) results = results.filter(t => t.status === status);
   if (region) results = results.filter(t => t.country?.toLowerCase() === String(region).toLowerCase() || true); // region matching is best-effort until pipeline data carries city-level granularity
-  res.json({ count: results.length, results });
+  res.json({ count: results.length, results, scoped_to_hub: req.hubScope || null });
 });
 
 // POST /v1/contracts/create
