@@ -22,9 +22,11 @@ app.use(express.json());
  * regardless of type — a hub's own hiring activity (if any) is still
  * private to the hub.
  *
- * Set FETCHTALOS_API_KEYS as a comma-separated "key:client_id" list for
- * simple enterprise keys (back-compat). Hub keys and richer metadata are
- * created via POST /admin/keys instead — see below.
+ * Set FETCHTALOS_API_KEYS as a comma-separated list. Two formats per entry:
+ *   key:client_id                          → defaults to type "enterprise"
+ *   key:client_id:hub:PipelineName         → a hub key locked to that pipeline
+ * Example:
+ *   ft_live_abc:chris_console,ft_live_xyz:tobi_lovable,ft_live_def:nithub_portal:hub:Nithub
  * ---------------------------------------------------------------------- */
 const DEFAULT_KEYS = {
   'ft_test_51x9k2mq7dev': { client_id: 'dev', type: 'enterprise', hub_scope: null },
@@ -33,7 +35,10 @@ const DEFAULT_KEYS = {
 const KEYS = process.env.FETCHTALOS_API_KEYS
   ? Object.fromEntries(
       process.env.FETCHTALOS_API_KEYS.split(',').map(pair => {
-        const [key, clientId] = pair.split(':');
+        const [key, clientId, maybeType, maybeScope] = pair.split(':');
+        if (maybeType === 'hub') {
+          return [key, { client_id: clientId, type: 'hub', hub_scope: maybeScope }];
+        }
         return [key, { client_id: clientId, type: 'enterprise', hub_scope: null }];
       })
     )
@@ -97,6 +102,67 @@ async function getNgnRate(employerCurrency) {
 }
 
 /* ---------------------------------------------------------------------- *
+ * PERSISTENCE — without this, EVERYTHING resets on every restart, and
+ * Render's free tier restarts the process after just 15 minutes of
+ * inactivity (not only on deploys). That's fine for talents/contracts/
+ * payouts resetting (annoying, not dangerous) — but it's a real problem
+ * for admin-created API keys specifically, since a key that only exists in
+ * memory simply stops authenticating the moment the process restarts,
+ * breaking whoever's using it with no warning.
+ *
+ * This is OPTIONAL and gracefully degrades: if UPSTASH_REDIS_REST_URL and
+ * UPSTASH_REDIS_REST_TOKEN aren't set, the server runs exactly as before —
+ * in-memory only. Set both (free tier at upstash.com) to persist real state
+ * across restarts.
+ * ---------------------------------------------------------------------- */
+const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const PERSISTENCE_ENABLED = Boolean(REDIS_URL && REDIS_TOKEN);
+
+async function saveState() {
+  if (!PERSISTENCE_ENABLED) return; // silently a no-op — in-memory-only mode
+  try {
+    const snapshot = JSON.stringify({
+      keys: KEYS,
+      talents: db.talents,
+      contracts: [...db.contracts.entries()],
+      payouts: [...db.payouts.entries()]
+    });
+    await fetch(`${REDIS_URL}/set/fetchtalos_state`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${REDIS_TOKEN}` },
+      body: snapshot
+    });
+  } catch (err) {
+    // Never let a persistence failure break the actual request — log and move on.
+    console.warn('[persistence] save failed, continuing in-memory only:', err.message);
+  }
+}
+
+async function loadState() {
+  if (!PERSISTENCE_ENABLED) {
+    console.log('[persistence] UPSTASH_REDIS_REST_URL/TOKEN not set — running in-memory only, all data resets on restart');
+    return;
+  }
+  try {
+    const res = await fetch(`${REDIS_URL}/get/fetchtalos_state`, { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } });
+    const data = await res.json();
+    if (data?.result) {
+      const snapshot = JSON.parse(data.result);
+      Object.assign(KEYS, snapshot.keys || {});
+      if (snapshot.talents?.length) db.talents = snapshot.talents;
+      if (snapshot.contracts) db.contracts = new Map(snapshot.contracts);
+      if (snapshot.payouts) db.payouts = new Map(snapshot.payouts);
+      console.log(`[persistence] restored ${db.talents.length} talents, ${db.contracts.size} contracts, ${db.payouts.size} payouts, ${Object.keys(KEYS).length} keys`);
+    } else {
+      console.log('[persistence] connected, no prior saved state — starting fresh');
+    }
+  } catch (err) {
+    console.warn('[persistence] load failed, starting in-memory only:', err.message);
+  }
+}
+
+/* ---------------------------------------------------------------------- *
  * ADMIN — this is how YOU see everything across every client, and how new
  * client keys get created WITHOUT hand-editing Render's env vars every
  * time. Protected by a separate admin key so it's not exposed alongside
@@ -121,11 +187,9 @@ function requireAdminKey(req, res, next) {
 // Body: { client_id, type: "enterprise" | "hub", hub_scope: "ALX Africa" }
 // hub_scope is REQUIRED when type is "hub" — it's what locks that key's
 // talent discovery down to one pipeline. Omit type to default to "enterprise".
-// NOTE: new keys created this way live only in memory — they're gone on the
-// next deploy/restart, same as all other data right now. Fine for spinning
-// up a tester for a day; not a substitute for real persistent storage once
-// you have people you don't want to re-onboard after every deploy.
-app.post('/admin/keys', requireAdminKey, (req, res) => {
+// Persisted immediately if UPSTASH_REDIS_REST_URL/TOKEN are set — otherwise
+// this key dies the moment the server restarts (see PERSISTENCE section above).
+app.post('/admin/keys', requireAdminKey, async (req, res) => {
   const { client_id, type = 'enterprise', hub_scope = null } = req.body || {};
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
   if (!['enterprise', 'hub'].includes(type)) return res.status(400).json({ error: 'type must be "enterprise" or "hub"' });
@@ -133,7 +197,8 @@ app.post('/admin/keys', requireAdminKey, (req, res) => {
 
   const newKey = `ft_live_${crypto.randomBytes(9).toString('hex')}`;
   KEYS[newKey] = { client_id, type, hub_scope: type === 'hub' ? hub_scope : null };
-  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope });
+  await saveState();
+  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope, persisted: PERSISTENCE_ENABLED });
 });
 
 // GET /admin/keys — list every client, their type/scope, and their key (masked).
@@ -151,7 +216,7 @@ app.get('/admin/keys', requireAdminKey, (req, res) => {
 // pipeline graduates actually get into FetchTalos — right now it's you
 // calling this by hand; a hub's own onboarding flow would call it too,
 // eventually.
-app.post('/admin/talents', requireAdminKey, (req, res) => {
+app.post('/admin/talents', requireAdminKey, async (req, res) => {
   const { name, stack, pipeline, country, vetted_score } = req.body || {};
   if (!name || !pipeline || !country) {
     return res.status(400).json({ error: 'name, pipeline, and country are required' });
@@ -166,6 +231,7 @@ app.post('/admin/talents', requireAdminKey, (req, res) => {
     status: 'available'
   };
   db.talents.push(talent);
+  await saveState();
   res.status(201).json(talent);
 });
 
@@ -225,7 +291,7 @@ app.get('/v1/talents/discover', (req, res) => {
 });
 
 // POST /v1/contracts/create
-app.post('/v1/contracts/create', (req, res) => {
+app.post('/v1/contracts/create', async (req, res) => {
   const { talent_id, employer_country, employer_currency = 'USD', coverage_plan = 'remote_contractor_basic' } = req.body || {};
 
   const talent = db.talents.find(t => t.talent_id === talent_id);
@@ -249,6 +315,7 @@ app.post('/v1/contracts/create', (req, res) => {
   };
   db.contracts.set(contract_id, contract);
   talent.status = 'engaged';
+  await saveState();
 
   res.status(201).json(contract);
 });
@@ -322,6 +389,7 @@ app.post('/v1/payroll/disburse', async (req, res) => {
   };
 
   db.payouts.set(payout_id, payout);
+  await saveState();
   res.status(202).json(payout);
 });
 
@@ -345,7 +413,8 @@ app.get('/v1/ledger', (req, res) => {
   res.json({ ...totals, payout_count: payouts.length, payouts: payouts.reverse() });
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, service: 'fetchtalos-api', time: new Date().toISOString() }));
+app.get('/health', (req, res) => res.json({ ok: true, service: 'fetchtalos-api', time: new Date().toISOString(), persistence: PERSISTENCE_ENABLED ? 'enabled' : 'in-memory-only' }));
 
 const PORT = process.env.PORT || 3000;
+await loadState(); // restore prior state (if persistence is configured) BEFORE accepting traffic
 app.listen(PORT, () => console.log(`FetchTalos API listening on :${PORT}`));
