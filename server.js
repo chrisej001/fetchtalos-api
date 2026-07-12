@@ -64,12 +64,13 @@ function requireApiKey(req, res, next) {
  * ---------------------------------------------------------------------- */
 const db = {
   talents: [
-    { talent_id: 'tal_0x91af', name: 'Chinedu O.', stack: ['Node', 'Postgres', 'Go'], pipeline: 'ALX Africa', country: 'NG', vetted_score: 92, status: 'available' },
-    { talent_id: 'tal_0x7c3d', name: 'Amara N.', stack: ['React', 'TypeScript'], pipeline: 'AltSchool Africa', country: 'NG', vetted_score: 88, status: 'available' },
-    { talent_id: 'tal_0x2b19', name: 'Kwame A.', stack: ['Python', 'Django'], pipeline: 'ALX Africa', country: 'GH', vetted_score: 85, status: 'available' },
-    { talent_id: 'tal_0x5e77', name: 'Tolu F.', stack: ['Rust', 'WASM'], pipeline: 'Nithub', country: 'NG', vetted_score: 94, status: 'available' },
-    { talent_id: 'tal_0x8f22', name: 'Ifeoma C.', stack: ['Node', 'React', 'AWS'], pipeline: 'AltSchool Africa', country: 'NG', vetted_score: 90, status: 'available' },
+    { talent_id: 'tal_0x91af', name: 'Chinedu O.', email: 'chinedu.demo@example.com', stack: ['Node', 'Postgres', 'Go'], pipeline: 'ALX Africa', country: 'NG', vetted_score: 92, status: 'available' },
+    { talent_id: 'tal_0x7c3d', name: 'Amara N.', email: 'amara.demo@example.com', stack: ['React', 'TypeScript'], pipeline: 'AltSchool Africa', country: 'NG', vetted_score: 88, status: 'available' },
+    { talent_id: 'tal_0x2b19', name: 'Kwame A.', email: 'kwame.demo@example.com', stack: ['Python', 'Django'], pipeline: 'ALX Africa', country: 'GH', vetted_score: 85, status: 'available' },
+    { talent_id: 'tal_0x5e77', name: 'Tolu F.', email: 'tolu.demo@example.com', stack: ['Rust', 'WASM'], pipeline: 'Nithub', country: 'NG', vetted_score: 94, status: 'available' },
+    { talent_id: 'tal_0x8f22', name: 'Ifeoma C.', email: 'ifeoma.demo@example.com', stack: ['Node', 'React', 'AWS'], pipeline: 'AltSchool Africa', country: 'NG', vetted_score: 90, status: 'available' },
   ],
+  engagements: new Map(), // the interview-invite stage — created BEFORE any contract exists
   contracts: new Map(),
   payouts: new Map(),
 };
@@ -102,6 +103,46 @@ async function getNgnRate(employerCurrency) {
 }
 
 /* ---------------------------------------------------------------------- *
+ * EMAIL — sends real emails via Resend (resend.com). If RESEND_API_KEY
+ * isn't set, this gracefully degrades to logging the email content to the
+ * console instead of failing — so the hiring flow still WORKS end to end
+ * for testing, you just won't get a real inbox notification until you add
+ * a key.
+ *
+ * Set RESEND_API_KEY and RESEND_FROM_EMAIL (e.g. "FetchTalos <hire@yourdomain.com>").
+ * NOTE: Resend's sandbox mode (no verified domain yet) only delivers to the
+ * email address YOU signed up with — so early testing, a talent's "email"
+ * needs to be your own address to actually receive anything. Use
+ * PATCH /admin/talents/:id to change a seed talent's email for testing.
+ * ---------------------------------------------------------------------- */
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM = process.env.RESEND_FROM_EMAIL || 'FetchTalos <onboarding@resend.dev>';
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://fetchtalos.onrender.com';
+
+async function sendEmail({ to, subject, html }) {
+  if (!RESEND_API_KEY) {
+    console.log(`[email] RESEND_API_KEY not set — would have sent to ${to}:\nSubject: ${subject}\n${html}\n`);
+    return { sent: false, reason: 'no_api_key' };
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: RESEND_FROM, to, subject, html })
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      console.warn(`[email] Resend rejected the send (${res.status}):`, detail);
+      return { sent: false, reason: `resend_error_${res.status}` };
+    }
+    return { sent: true };
+  } catch (err) {
+    console.warn('[email] send failed, continuing anyway:', err.message);
+    return { sent: false, reason: err.message };
+  }
+}
+
+/* ---------------------------------------------------------------------- *
  * PERSISTENCE — without this, EVERYTHING resets on every restart, and
  * Render's free tier restarts the process after just 15 minutes of
  * inactivity (not only on deploys). That's fine for talents/contracts/
@@ -125,6 +166,7 @@ async function saveState() {
     const snapshot = JSON.stringify({
       keys: KEYS,
       talents: db.talents,
+      engagements: [...db.engagements.entries()],
       contracts: [...db.contracts.entries()],
       payouts: [...db.payouts.entries()]
     });
@@ -151,6 +193,7 @@ async function loadState() {
       const snapshot = JSON.parse(data.result);
       Object.assign(KEYS, snapshot.keys || {});
       if (snapshot.talents?.length) db.talents = snapshot.talents;
+      if (snapshot.engagements) db.engagements = new Map(snapshot.engagements);
       if (snapshot.contracts) db.contracts = new Map(snapshot.contracts);
       if (snapshot.payouts) db.payouts = new Map(snapshot.payouts);
       console.log(`[persistence] restored ${db.talents.length} talents, ${db.contracts.size} contracts, ${db.payouts.size} payouts, ${Object.keys(KEYS).length} keys`);
@@ -242,6 +285,17 @@ app.get('/admin/talents', requireAdminKey, (req, res) => {
   res.json({ count: db.talents.length, results: db.talents });
 });
 
+// PATCH /admin/talents/:id — update any field, most commonly used to set a
+// REAL email on a seed/demo talent so the interview/contract email flow
+// below has somewhere to actually deliver to during testing.
+app.patch('/admin/talents/:id', requireAdminKey, async (req, res) => {
+  const talent = db.talents.find(t => t.talent_id === req.params.id);
+  if (!talent) return res.status(404).json({ error: 'talent_not_found' });
+  Object.assign(talent, req.body || {});
+  await saveState();
+  res.json(talent);
+});
+
 // GET /admin/overview — see EVERYTHING across EVERY client at once. This is
 // your answer to "where do I see what's going on in Tobi vs. the console" —
 // without this, you'd have to manually swap keys in the regular console to
@@ -267,10 +321,16 @@ app.get('/admin/overview', requireAdminKey, (req, res) => {
 });
 
 /* ---------------------------------------------------------------------- *
- * ROUTES — everything under /v1 requires the API key. /health does not,
- * so uptime monitors and load balancers can hit it without a key.
+ * ROUTES — everything under /v1 requires the API key EXCEPT the two
+ * talent-facing "accept" links below, which are public (a talent has no
+ * API key — they're clicking a link from an email).
  * ---------------------------------------------------------------------- */
-app.use('/v1', requireApiKey);
+app.use('/v1', (req, res, next) => {
+  if (req.method === 'GET' && /^\/(engagements|contracts)\/[^/]+\/accept$/.test(req.path)) {
+    return next(); // public — skip the API key check for these two routes only
+  }
+  return requireApiKey(req, res, next);
+});
 
 // GET /v1/talents/discover
 app.get('/v1/talents/discover', (req, res) => {
@@ -290,34 +350,168 @@ app.get('/v1/talents/discover', (req, res) => {
   res.json({ count: results.length, results, scoped_to_hub: req.hubScope || null });
 });
 
-// POST /v1/contracts/create
-app.post('/v1/contracts/create', async (req, res) => {
-  const { talent_id, employer_country, employer_currency = 'USD', coverage_plan = 'remote_contractor_basic' } = req.body || {};
+/* ---------------------------------------------------------------------- *
+ * THE HIRING FLOW — this is the real sequence, not one instant API call:
+ *
+ * 1. POST /v1/engagements/create  — enterprise clicks "Engage". Sends the
+ *    TALENT an interview invite email (with whatever meeting/booking link
+ *    the enterprise provides — Calendly, Zoom, Meet, anything). Talent
+ *    status locks to "interviewing" so nobody else can engage them
+ *    mid-process. Terms (currency, plan, proposed salary) are captured
+ *    HERE and carried forward — the enterprise doesn't re-enter them later.
+ *
+ * 2. GET /v1/engagements/:id/accept — TALENT clicks the link in that
+ *    email to confirm they're in for the interview. No API key needed;
+ *    it's a public token-based link, same pattern as a DocuSign/Calendly
+ *    confirmation link.
+ *
+ * 3. The interview itself happens OFF-PLATFORM — a real human conversation
+ *    on whatever call tool was in the invite. FetchTalos doesn't try to be
+ *    a video product.
+ *
+ * 4. POST /v1/engagements/:id/contract — enterprise clicks "Contract"
+ *    (after the interview went well). Generates the real contract using
+ *    the terms captured back in step 1, and emails THE TALENT the
+ *    contract terms + an accept link. Nothing changes for the talent yet.
+ *
+ * 5. GET /v1/contracts/:id/accept — TALENT accepts the contract. ONLY NOW
+ *    does status flip to "engaged" and the contract to "active". This is
+ *    the step that was missing before — a talent should never be marked
+ *    hired because an enterprise clicked a button with zero involvement
+ *    from the talent themselves.
+ * ---------------------------------------------------------------------- */
+
+// POST /v1/engagements/create — "Engage": sends an interview invite
+app.post('/v1/engagements/create', async (req, res) => {
+  const {
+    talent_id, employer_country, employer_currency = 'USD', coverage_plan = 'remote_contractor_basic',
+    proposed_amount, interview_link, proposed_time, message
+  } = req.body || {};
+
+  if (!interview_link) return res.status(400).json({ error: 'interview_link is required — a Calendly/Zoom/Meet link, whatever the enterprise uses' });
 
   const talent = db.talents.find(t => t.talent_id === talent_id);
   if (!talent) return res.status(404).json({ error: 'talent_not_found' });
   if (talent.status !== 'available') return res.status(409).json({ error: 'talent_not_available' });
 
-  const contract_id = id('ctr');
-  const contract = {
-    contract_id,
-    client_id: req.clientId, // scopes this contract to whoever's key created it
+  const engagement_id = id('eng');
+  const accept_token = crypto.randomBytes(12).toString('hex');
+  const engagement = {
+    engagement_id,
+    client_id: req.clientId,
     talent_id,
     talent_name: talent.name,
-    employer_country,
-    employer_currency,
-    tax_form: taxFormMap[employer_country] || 'local_equivalent_required',
-    coverage_plan,
+    employer_country, employer_currency, coverage_plan, proposed_amount: proposed_amount ? Number(proposed_amount) : null,
+    interview_link, proposed_time: proposed_time || null, message: message || null,
+    status: 'interview_invited', // interview_invited -> interview_accepted -> contract_sent -> contract_accepted
+    accept_token,
+    created_at: new Date().toISOString(),
+  };
+  db.engagements.set(engagement_id, engagement);
+  talent.status = 'interviewing';
+  await saveState();
+
+  const acceptUrl = `${PUBLIC_BASE_URL}/v1/engagements/${engagement_id}/accept?token=${accept_token}`;
+  await sendEmail({
+    to: talent.email,
+    subject: `Interview invite via FetchTalos`,
+    html: `<p>Hi ${talent.name},</p>
+      <p>An employer would like to interview you for a role sourced through your pipeline.</p>
+      ${proposed_time ? `<p><b>Proposed time:</b> ${proposed_time}</p>` : ''}
+      <p><b>Meeting link:</b> <a href="${interview_link}">${interview_link}</a></p>
+      ${message ? `<p><b>Note from the employer:</b> ${message}</p>` : ''}
+      <p><a href="${acceptUrl}">Click here to confirm you're in for this interview</a></p>`
+  });
+
+  res.status(201).json({ ...engagement, accept_url: acceptUrl });
+});
+
+// GET /v1/engagements/:id/accept — TALENT-facing, public, no API key
+app.get('/v1/engagements/:id/accept', async (req, res) => {
+  const engagement = db.engagements.get(req.params.id);
+  if (!engagement || engagement.accept_token !== req.query.token) {
+    return res.status(404).send('<h2>Invalid or expired link.</h2>');
+  }
+  if (engagement.status === 'interview_invited') {
+    engagement.status = 'interview_accepted';
+    await saveState();
+  }
+  res.send(`<h2>Interview confirmed</h2><p>Thanks ${engagement.talent_name} — you're confirmed. See you there.</p>`);
+});
+
+// POST /v1/engagements/:id/contract — enterprise clicks "Contract" after the interview
+app.post('/v1/engagements/:id/contract', async (req, res) => {
+  const engagement = db.engagements.get(req.params.id);
+  if (!engagement || engagement.client_id !== req.clientId) return res.status(404).json({ error: 'engagement_not_found' });
+  if (engagement.status === 'contract_sent' || engagement.status === 'contract_accepted') {
+    return res.status(409).json({ error: 'contract_already_sent' });
+  }
+
+  const talent = db.talents.find(t => t.talent_id === engagement.talent_id);
+  const contract_id = id('ctr');
+  const accept_token = crypto.randomBytes(12).toString('hex');
+  const contract = {
+    contract_id,
+    engagement_id: engagement.engagement_id,
+    client_id: req.clientId,
+    talent_id: engagement.talent_id,
+    talent_name: engagement.talent_name,
+    employer_country: engagement.employer_country,
+    employer_currency: engagement.employer_currency,
+    proposed_amount: engagement.proposed_amount,
+    tax_form: taxFormMap[engagement.employer_country] || 'local_equivalent_required',
+    coverage_plan: engagement.coverage_plan,
     kyc_status: 'pending', // would flip to verified/failed via Bridgecard webhook in production
     coverage_status: 'gap_not_wired', // see ARCHITECTURE.md — MyCover purchase endpoint needs distributor access
-    status: 'awaiting_countersignature',
+    status: 'pending_talent_signature', // flips to 'active' only when the TALENT accepts below
+    accept_token,
     created_at: new Date().toISOString(),
   };
   db.contracts.set(contract_id, contract);
-  talent.status = 'engaged';
+  engagement.status = 'contract_sent';
   await saveState();
 
-  res.status(201).json(contract);
+  const acceptUrl = `${PUBLIC_BASE_URL}/v1/contracts/${contract_id}/accept?token=${accept_token}`;
+  await sendEmail({
+    to: talent.email,
+    subject: `Your contract is ready to review`,
+    html: `<p>Hi ${engagement.talent_name},</p>
+      <p>Following your interview, here's the contract for your review:</p>
+      <ul>
+        <li><b>Employer jurisdiction:</b> ${engagement.employer_country}</li>
+        <li><b>Currency:</b> ${engagement.employer_currency}</li>
+        ${engagement.proposed_amount ? `<li><b>Proposed amount:</b> ${engagement.proposed_amount} ${engagement.employer_currency}</li>` : ''}
+        <li><b>Coverage plan:</b> ${engagement.coverage_plan}</li>
+        <li><b>Tax form:</b> ${contract.tax_form}</li>
+      </ul>
+      <p><a href="${acceptUrl}">Click here to accept and sign</a></p>`
+  });
+
+  res.status(201).json({ ...contract, accept_url: acceptUrl });
+});
+
+// GET /v1/contracts/:id/accept — TALENT-facing, public, no API key. THIS is
+// the only place a talent's status is allowed to flip to "engaged".
+app.get('/v1/contracts/:id/accept', async (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract || contract.accept_token !== req.query.token) {
+    return res.status(404).send('<h2>Invalid or expired link.</h2>');
+  }
+  if (contract.status === 'pending_talent_signature') {
+    contract.status = 'active';
+    const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+    if (talent) talent.status = 'engaged';
+    const engagement = contract.engagement_id ? db.engagements.get(contract.engagement_id) : null;
+    if (engagement) engagement.status = 'contract_accepted';
+    await saveState();
+  }
+  res.send(`<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. Your first payroll run will follow this contract's terms.</p>`);
+});
+
+// GET /v1/engagements — list, scoped to requesting client
+app.get('/v1/engagements', (req, res) => {
+  const mine = [...db.engagements.values()].filter(e => e.client_id === req.clientId);
+  res.json({ count: mine.length, results: mine });
 });
 
 // GET /v1/contracts/:id
