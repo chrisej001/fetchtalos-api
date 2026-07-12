@@ -18,7 +18,7 @@
   h1,h2,h3{font-family:'Space Grotesk',sans-serif;}
   code,.mono{font-family:'IBM Plex Mono',monospace;}
   button{font-family:inherit; cursor:pointer;}
-  .wrap{max-width:1100px; margin:0 auto; padding:0 24px;}
+  .wrap{max-width:1140px; margin:0 auto; padding:0 24px;}
 
   header{border-bottom:1px solid var(--border-soft); padding:16px 0; position:sticky; top:0; background:rgba(11,14,20,.92); backdrop-filter:blur(8px); z-index:40;}
   .header-inner{display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;}
@@ -26,22 +26,18 @@
   .logo svg{width:19px; height:19px;}
 
   .conn-bar{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
-  .conn-bar input{
-    background:var(--bg-input); border:1px solid var(--border); color:var(--text);
-    padding:7px 10px; border-radius:6px; font-size:12px; font-family:'IBM Plex Mono',monospace;
-  }
+  .conn-bar input{background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:7px 10px; border-radius:6px; font-size:12px; font-family:'IBM Plex Mono',monospace;}
   #baseUrlInput{width:220px;} #apiKeyInput{width:170px;}
   .conn-btn{background:var(--amber); color:#0B0E14; border:none; padding:7px 14px; border-radius:6px; font-weight:600; font-size:12px;}
-  .conn-status{display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:11px; padding:3px 0;}
+  .conn-status{display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:11px;}
   .conn-dot{width:7px; height:7px; border-radius:50%; background:var(--text-faint);}
   .conn-dot.ok{background:var(--teal); box-shadow:0 0 6px var(--teal);}
   .conn-dot.bad{background:var(--red);}
 
-  .banner{
-    background:rgba(242,166,90,.06); border:1px solid rgba(242,166,90,.2); border-radius:8px;
-    padding:10px 14px; margin:16px 0; font-size:12.5px; color:var(--text-muted); line-height:1.6;
-  }
+  .banner{background:rgba(242,166,90,.06); border:1px solid rgba(242,166,90,.2); border-radius:8px; padding:10px 14px; margin:16px 0; font-size:12.5px; color:var(--text-muted); line-height:1.6;}
   .banner b{color:var(--amber);}
+  .banner.info{background:rgba(94,234,212,.06); border-color:rgba(94,234,212,.2);}
+  .banner.info b{color:var(--teal);}
 
   .tabbar{display:flex; gap:2px; margin:18px 0 0; border-bottom:1px solid var(--border-soft); overflow-x:auto;}
   .tabbtn{background:none; border:none; padding:10px 15px; font-size:13px; font-weight:500; color:var(--text-faint); border-bottom:2px solid transparent; white-space:nowrap;}
@@ -65,25 +61,25 @@
   td{padding:11px 13px; border-bottom:1px solid var(--border-soft); vertical-align:middle;}
   tr:last-child td{border-bottom:none;}
   .stack-tag{display:inline-block; background:var(--bg-raised); border:1px solid var(--border); color:var(--text-muted); font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 6px; border-radius:5px; margin:1px 2px 1px 0;}
-  .status-pill{font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 8px; border-radius:100px; display:inline-block;}
-  .status-available{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
-  .status-engaged{background:rgba(242,166,90,.1); color:var(--amber); border:1px solid rgba(242,166,90,.3);}
-  .status-pending{background:rgba(196,162,240,.1); color:var(--purple); border:1px solid rgba(196,162,240,.3);}
-  .status-settled{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
-  .row-btn{background:var(--bg-raised); border:1px solid var(--border); color:var(--text); font-size:11.5px; padding:5px 11px; border-radius:6px;}
-  .row-btn:hover{border-color:var(--amber);}
-  .row-btn:disabled{opacity:.4; cursor:not-allowed;}
+  .status-pill{font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 8px; border-radius:100px; display:inline-block; white-space:nowrap;}
+  .status-available, .status-active, .status-interview_accepted, .status-contract_accepted, .status-settled{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
+  .status-engaged, .status-interviewing, .status-interview_invited, .status-contract_sent{background:rgba(242,166,90,.1); color:var(--amber); border:1px solid rgba(242,166,90,.3);}
+  .status-pending_talent_signature{background:rgba(196,162,240,.1); color:var(--purple); border:1px solid rgba(196,162,240,.3);}
   .empty-state{padding:34px 20px; text-align:center; color:var(--text-faint); font-size:12.5px; font-family:'IBM Plex Mono',monospace;}
 
   .search-row{display:flex; gap:9px; margin-bottom:14px; flex-wrap:wrap;}
   .search-input, select{background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:8px 11px; border-radius:7px; font-size:12.5px; font-family:'Inter',sans-serif;}
   .search-input{flex:1; min-width:180px;}
 
-  .field{margin-bottom:13px; max-width:320px;}
+  .field{margin-bottom:13px; max-width:400px;}
   .field label{display:block; font-size:11.5px; color:var(--text-muted); margin-bottom:5px; font-family:'IBM Plex Mono',monospace;}
   .field input, .field select{width:100%;}
   .btn-primary{background:var(--amber); color:#0B0E14; border:none; padding:9px 17px; border-radius:7px; font-weight:600; font-size:13px;}
   .btn-primary:hover{opacity:.88;} .btn-primary:disabled{opacity:.4;}
+  .btn-teal{background:var(--teal); color:#0B0E14; border:none; padding:6px 12px; border-radius:6px; font-weight:600; font-size:11.5px;}
+  .btn-teal:hover{opacity:.85;}
+  .row-btn{background:var(--bg-raised); border:1px solid var(--border); color:var(--text); font-size:11.5px; padding:5px 11px; border-radius:6px;}
+  .row-btn:hover{border-color:var(--amber);}
 
   .receipt{background:var(--bg-input); border:1px solid var(--border); border-radius:8px; padding:15px 17px; margin-top:15px; max-width:420px;}
   .receipt-row{display:flex; justify-content:space-between; padding:5px 0; font-size:12px; border-bottom:1px dashed var(--border-soft);}
@@ -97,14 +93,14 @@
 
   .modal-overlay{display:none; position:fixed; inset:0; background:rgba(6,8,12,.7); backdrop-filter:blur(3px); z-index:100; align-items:flex-start; justify-content:center; padding:60px 20px; overflow-y:auto;}
   .modal-overlay.open{display:flex;}
-  .modal{background:var(--bg-surface); border:1px solid var(--border); border-radius:12px; max-width:440px; width:100%; padding:24px; position:relative;}
+  .modal{background:var(--bg-surface); border:1px solid var(--border); border-radius:12px; max-width:460px; width:100%; padding:24px; position:relative;}
   .modal h3{margin:0 0 3px; font-size:16px;}
   .modal .modal-sub{color:var(--text-muted); font-size:12px; margin:0 0 18px; font-family:'IBM Plex Mono',monospace;}
   .modal-actions{display:flex; gap:9px; margin-top:16px;}
   .btn-secondary{background:transparent; border:1px solid var(--border); color:var(--text); padding:9px 17px; border-radius:7px; font-weight:600; font-size:13px;}
   .modal-close{position:absolute; top:16px; right:18px; background:none; border:none; color:var(--text-faint); font-size:17px;}
 
-  .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--bg-raised); border:1px solid var(--teal); color:var(--teal); padding:10px 18px; border-radius:8px; font-family:'IBM Plex Mono',monospace; font-size:12px; opacity:0; transition:all .25s; z-index:200;}
+  .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--bg-raised); border:1px solid var(--teal); color:var(--teal); padding:10px 18px; border-radius:8px; font-family:'IBM Plex Mono',monospace; font-size:12px; opacity:0; transition:all .25s; z-index:200; max-width:80vw; text-align:center;}
   .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
   .toast.error{border-color:var(--red); color:var(--red);}
 </style>
@@ -127,14 +123,17 @@
 </header>
 
 <div class="wrap">
-  <div class="banner">
-    This console hits a <b>real, running FetchTalos API</b> — not mock data. Point the base URL above
-    at <code>localhost:3000</code> to test locally, or at a deployed/ngrok URL to test remotely or hand
-    this to a friend. It sends real requests with your API key over <code>Authorization: Bearer</code>.
+  <div class="banner info">
+    Hiring is now a real multi-step flow: <b>Engage</b> (sends an interview invite) &rarr; talent accepts &rarr;
+    <b>Send Contract</b> &rarr; talent accepts &rarr; <b>only then</b> can payroll run. Since this console has no
+    real talent on the other end, each step that would normally require a talent clicking an email link
+    has a <b>"Simulate talent action"</b> button &mdash; it calls the exact same public accept link a real
+    talent would click, just triggered by you instead of an email.
   </div>
 
   <div class="tabbar">
     <button class="tabbtn active" data-panel="talent">Talent Pool</button>
+    <button class="tabbtn" data-panel="engagements">Engagements</button>
     <button class="tabbtn" data-panel="contracts">Contracts</button>
     <button class="tabbtn" data-panel="payroll">Payroll</button>
     <button class="tabbtn" data-panel="ledger">Ledger</button>
@@ -145,7 +144,7 @@
       <div class="panel-head"><h2>Talent pool</h2><p class="sub">GET /v1/talents/discover</p></div>
       <div class="search-row">
         <input class="search-input" id="talentSearch" placeholder="filter by skill (e.g. node, react)...">
-        <button class="row-btn" id="refreshTalentBtn">↻ Refresh</button>
+        <button class="row-btn" id="refreshTalentBtn">Refresh</button>
       </div>
       <div class="tbl-wrap">
         <table><thead><tr><th>Talent</th><th>Stack</th><th>Pipeline</th><th>Score</th><th>Status</th><th></th></tr></thead>
@@ -153,31 +152,40 @@
       </div>
     </section>
 
+    <section class="panel" id="panel-engagements">
+      <div class="panel-head"><h2>Engagements</h2><p class="sub">interview stage &mdash; before any contract exists</p></div>
+      <button class="row-btn" id="refreshEngagementsBtn" style="margin-bottom:14px;">Refresh</button>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Talent</th><th>Interview link</th><th>Status</th><th></th></tr></thead>
+        <tbody id="engagementsTableBody"><tr><td colspan="4" class="empty-state">// connect to load</td></tr></tbody></table>
+      </div>
+    </section>
+
     <section class="panel" id="panel-contracts">
       <div class="panel-head"><h2>Contracts</h2><p class="sub">GET /v1/contracts</p></div>
-      <button class="row-btn" id="refreshContractsBtn" style="margin-bottom:14px;">↻ Refresh</button>
+      <button class="row-btn" id="refreshContractsBtn" style="margin-bottom:14px;">Refresh</button>
       <div class="tbl-wrap">
-        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Employer</th><th>Currency</th><th>Tax form</th><th>Status</th></tr></thead>
-        <tbody id="contractsTableBody"><tr><td colspan="6" class="empty-state">// connect to load contracts</td></tr></tbody></table>
+        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th></th></tr></thead>
+        <tbody id="contractsTableBody"><tr><td colspan="5" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
 
     <section class="panel" id="panel-payroll">
-      <div class="panel-head"><h2>Run payroll</h2><p class="sub">POST /v1/payroll/disburse — real FX conversion happens here</p></div>
-      <div class="field"><label>Active contract</label><select id="payrollContractSelect"><option value="">— connect to load —</option></select></div>
+      <div class="panel-head"><h2>Run payroll</h2><p class="sub">POST /v1/payroll/disburse &mdash; only ACTIVE (talent-accepted) contracts show here</p></div>
+      <div class="field"><label>Active contract</label><select id="payrollContractSelect"><option value="">connect to load</option></select></div>
       <div class="field"><label>Gross amount (in employer's currency)</label><input class="search-input" type="number" id="payrollAmount" placeholder="e.g. 2400"></div>
       <button class="btn-primary" id="runPayrollBtn">Disburse</button>
       <div id="payrollResult"></div>
     </section>
 
     <section class="panel" id="panel-ledger">
-      <div class="panel-head"><h2>Ledger</h2><p class="sub">GET /v1/ledger — live totals from every payout run against this API</p></div>
-      <button class="row-btn" id="refreshLedgerBtn" style="margin-bottom:14px;">↻ Refresh</button>
+      <div class="panel-head"><h2>Ledger</h2><p class="sub">GET /v1/ledger &mdash; live totals from every payout run against this API</p></div>
+      <button class="row-btn" id="refreshLedgerBtn" style="margin-bottom:14px;">Refresh</button>
       <div class="stat-strip">
-        <div class="stat-cell"><div class="l">PAYOUTS RUN</div><div class="v" id="statCount">—</div></div>
-        <div class="stat-cell"><div class="l">FETCHTALOS REVENUE (USD-EQUIV)</div><div class="v amber" id="statRevenue">—</div></div>
-        <div class="stat-cell"><div class="l">CARE WALLET FUNDED</div><div class="v teal" id="statWallet">—</div></div>
-        <div class="stat-cell"><div class="l">VOLUME BY CURRENCY</div><div class="v" id="statVolume" style="font-size:12px;">—</div></div>
+        <div class="stat-cell"><div class="l">PAYOUTS RUN</div><div class="v" id="statCount">-</div></div>
+        <div class="stat-cell"><div class="l">FETCHTALOS REVENUE</div><div class="v amber" id="statRevenue">-</div></div>
+        <div class="stat-cell"><div class="l">CARE WALLET FUNDED</div><div class="v teal" id="statWallet">-</div></div>
+        <div class="stat-cell"><div class="l">VOLUME BY CURRENCY</div><div class="v" id="statVolume" style="font-size:12px;">-</div></div>
       </div>
       <div class="tbl-wrap">
         <table><thead><tr><th>Payout ID</th><th>Talent</th><th>Gross</th><th>Net (NGN)</th><th>FX rate</th><th>Status</th></tr></thead>
@@ -187,11 +195,11 @@
   </main>
 </div>
 
-<div class="modal-overlay" id="contractModalOverlay">
+<div class="modal-overlay" id="engageModalOverlay">
   <div class="modal">
-    <button class="modal-close" id="closeContractModal">✕</button>
-    <h3 id="contractModalTitle">Create contract</h3>
-    <p class="modal-sub">POST /v1/contracts/create</p>
+    <button class="modal-close" id="closeEngageModal">X</button>
+    <h3 id="engageModalTitle">Engage</h3>
+    <p class="modal-sub">POST /v1/engagements/create &mdash; sends an interview invite</p>
     <div class="field"><label>Employer country</label>
       <select id="employerCountrySelect"><option value="US">United States</option><option value="UK">United Kingdom</option><option value="DE">Germany</option><option value="CA">Canada</option></select>
     </div>
@@ -201,9 +209,12 @@
     <div class="field"><label>Coverage plan</label>
       <select id="coveragePlanSelect"><option value="remote_contractor_basic">Basic</option><option value="remote_contractor_plus">Plus</option><option value="remote_contractor_family">Family</option></select>
     </div>
+    <div class="field"><label>Proposed monthly amount</label><input id="proposedAmount" type="number" placeholder="e.g. 2400"></div>
+    <div class="field"><label>Interview link (Calendly, Zoom, Meet - your choice)</label><input id="interviewLink" placeholder="https://calendly.com/you/interview" value="https://calendly.com/acme-corp/interview"></div>
+    <div class="field"><label>Proposed time (optional, freeform)</label><input id="proposedTime" placeholder="e.g. Thursday 3pm WAT"></div>
     <div class="modal-actions">
-      <button class="btn-primary" id="generateContractBtn">Create contract</button>
-      <button class="btn-secondary" id="cancelContractBtn">Cancel</button>
+      <button class="btn-primary" id="sendEngageBtn">Send interview invite</button>
+      <button class="btn-secondary" id="cancelEngageBtn">Cancel</button>
     </div>
   </div>
 </div>
@@ -216,166 +227,226 @@ let API_KEY = document.getElementById('apiKeyInput').value;
 let pendingTalentId = null;
 let connected = false;
 
-function showToast(msg, isError=false){
+function showToast(msg, isError){
   const t = document.getElementById('toast');
   t.textContent = msg; t.className = 'toast show' + (isError ? ' error' : '');
-  setTimeout(()=>t.classList.remove('show'), 2600);
+  setTimeout(function(){ t.classList.remove('show'); }, 3200);
 }
 
-async function api(path, opts={}){
-  const res = await fetch(BASE_URL + path, {
-    ...opts,
-    headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + API_KEY, ...(opts.headers||{}) }
+function api(path, opts){
+  opts = opts || {};
+  var headers = Object.assign({ 'Content-Type':'application/json', 'Authorization': 'Bearer ' + API_KEY }, opts.headers || {});
+  return fetch(BASE_URL + path, Object.assign({}, opts, { headers: headers })).then(function(res){
+    return res.json().catch(function(){ return {}; }).then(function(data){
+      if(!res.ok){ var err = new Error(data.message || data.error || ('HTTP ' + res.status)); err.data = data; throw err; }
+      return data;
+    });
   });
-  const data = await res.json().catch(()=>({}));
-  if(!res.ok){ const err = new Error(data.message || data.error || `HTTP ${res.status}`); err.data = data; throw err; }
-  return data;
 }
 
-document.getElementById('connectBtn').onclick = doConnect;
-async function doConnect(){
+function publicGet(url){
+  return fetch(url).then(function(res){ return res.text(); });
+}
+
+document.getElementById('connectBtn').onclick = function(){
   BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
   API_KEY = document.getElementById('apiKeyInput').value;
-  try{
-    await fetch(BASE_URL + '/health').then(r=>{ if(!r.ok) throw new Error('unreachable'); });
-    await api('/v1/talents/discover'); // validates the key too
-    connected = true;
-    document.getElementById('connDot').className = 'conn-dot ok';
-    document.getElementById('connLabel').textContent = 'connected';
-    showToast('Connected to ' + BASE_URL);
-    renderTalent(); renderContracts(); renderLedger(); refreshPayrollSelect();
-  }catch(err){
-    connected = false;
-    document.getElementById('connDot').className = 'conn-dot bad';
-    document.getElementById('connLabel').textContent = 'failed — check URL/key';
-    showToast('Connection failed: ' + err.message, true);
-  }
-}
-// Auto-connect on load so friends opening this link see it working immediately, no clicking required.
-window.addEventListener('DOMContentLoaded', doConnect);
+  fetch(BASE_URL + '/health').then(function(r){ if(!r.ok) throw new Error('unreachable'); })
+    .then(function(){ return api('/v1/talents/discover'); })
+    .then(function(){
+      connected = true;
+      document.getElementById('connDot').className = 'conn-dot ok';
+      document.getElementById('connLabel').textContent = 'connected';
+      showToast('Connected to ' + BASE_URL);
+      renderTalent(); renderEngagements(); renderContracts(); renderLedger(); refreshPayrollSelect();
+    })
+    .catch(function(err){
+      connected = false;
+      document.getElementById('connDot').className = 'conn-dot bad';
+      document.getElementById('connLabel').textContent = 'failed - check URL/key';
+      showToast('Connection failed: ' + err.message, true);
+    });
+};
 
-/* TABS */
-document.querySelectorAll('.tabbtn').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('panel-'+btn.dataset.panel).classList.add('active');
-    if(btn.dataset.panel==='payroll') refreshPayrollSelect();
+var tabbtns = document.querySelectorAll('.tabbtn');
+for(var i=0;i<tabbtns.length;i++){
+  tabbtns[i].addEventListener('click', function(){
+    for(var j=0;j<tabbtns.length;j++) tabbtns[j].classList.remove('active');
+    var panels = document.querySelectorAll('.panel');
+    for(var k=0;k<panels.length;k++) panels[k].classList.remove('active');
+    this.classList.add('active');
+    document.getElementById('panel-'+this.dataset.panel).classList.add('active');
+    if(this.dataset.panel==='payroll') refreshPayrollSelect();
+    if(this.dataset.panel==='engagements') renderEngagements();
+    if(this.dataset.panel==='contracts') renderContracts();
   });
-});
+}
 
 /* TALENT */
-async function renderTalent(){
+function renderTalent(){
   if(!connected) return;
-  const skill = document.getElementById('talentSearch').value;
-  try{
-    const data = await api('/v1/talents/discover' + (skill ? `?skill=${encodeURIComponent(skill)}` : ''));
-    const tbody = document.getElementById('talentTableBody');
-    tbody.innerHTML = data.results.length ? data.results.map(t=>`
-      <tr><td><strong>${t.name}</strong><br><span style="color:var(--text-faint);font-family:'IBM Plex Mono',monospace;font-size:10px;">${t.talent_id}</span></td>
-      <td>${t.stack.map(s=>`<span class="stack-tag">${s}</span>`).join('')}</td>
-      <td style="color:var(--text-muted);">${t.pipeline}</td>
-      <td class="mono">${t.vetted_score}</td>
-      <td><span class="status-pill status-${t.status}">${t.status}</span></td>
-      <td><button class="row-btn" ${t.status!=='available'?'disabled':''} onclick="openContractModal('${t.talent_id}')">Create contract</button></td></tr>`).join('')
-      : `<tr><td colspan="6" class="empty-state">// no results</td></tr>`;
-  }catch(err){ showToast('Failed to load talent: ' + err.message, true); }
+  var skill = document.getElementById('talentSearch').value;
+  api('/v1/talents/discover' + (skill ? ('?skill=' + encodeURIComponent(skill)) : '')).then(function(data){
+    var tbody = document.getElementById('talentTableBody');
+    tbody.innerHTML = data.results.length ? data.results.map(function(t){
+      return '<tr><td><strong>'+t.name+'</strong><br><span style="color:var(--text-faint);font-family:\'IBM Plex Mono\',monospace;font-size:10px;">'+t.talent_id+'</span></td>'
+      + '<td>' + t.stack.map(function(s){return '<span class="stack-tag">'+s+'</span>';}).join('') + '</td>'
+      + '<td style="color:var(--text-muted);">'+t.pipeline+'</td>'
+      + '<td class="mono">'+t.vetted_score+'</td>'
+      + '<td><span class="status-pill status-'+t.status+'">'+t.status+'</span></td>'
+      + '<td><button class="row-btn" '+(t.status!=='available'?'disabled':'')+' onclick="openEngageModal(\''+t.talent_id+'\')">Engage</button></td></tr>';
+    }).join('') : '<tr><td colspan="6" class="empty-state">// no results</td></tr>';
+  }).catch(function(err){ showToast('Failed to load talent: ' + err.message, true); });
 }
 document.getElementById('talentSearch').addEventListener('input', renderTalent);
 document.getElementById('refreshTalentBtn').onclick = renderTalent;
 
-/* CONTRACT MODAL */
-function openContractModal(talentId){ pendingTalentId = talentId; document.getElementById('contractModalOverlay').classList.add('open'); }
-document.getElementById('closeContractModal').onclick = closeModal;
-document.getElementById('cancelContractBtn').onclick = closeModal;
-function closeModal(){ document.getElementById('contractModalOverlay').classList.remove('open'); pendingTalentId = null; }
+/* ENGAGE MODAL */
+function openEngageModal(talentId){ pendingTalentId = talentId; document.getElementById('engageModalOverlay').classList.add('open'); }
+document.getElementById('closeEngageModal').onclick = closeEngageModal;
+document.getElementById('cancelEngageBtn').onclick = closeEngageModal;
+function closeEngageModal(){ document.getElementById('engageModalOverlay').classList.remove('open'); pendingTalentId = null; }
 
-document.getElementById('generateContractBtn').onclick = async ()=>{
+document.getElementById('sendEngageBtn').onclick = function(){
   if(!pendingTalentId) return;
-  try{
-    await api('/v1/contracts/create', { method:'POST', body: JSON.stringify({
-      talent_id: pendingTalentId,
-      employer_country: document.getElementById('employerCountrySelect').value,
-      employer_currency: document.getElementById('employerCurrencySelect').value,
-      coverage_plan: document.getElementById('coveragePlanSelect').value
-    })});
-    showToast('Contract created');
-    closeModal(); renderTalent(); renderContracts();
-  }catch(err){ showToast('Contract creation failed: ' + err.message, true); }
+  var interview_link = document.getElementById('interviewLink').value.trim();
+  if(!interview_link){ showToast('Interview link is required', true); return; }
+  api('/v1/engagements/create', { method:'POST', body: JSON.stringify({
+    talent_id: pendingTalentId,
+    employer_country: document.getElementById('employerCountrySelect').value,
+    employer_currency: document.getElementById('employerCurrencySelect').value,
+    coverage_plan: document.getElementById('coveragePlanSelect').value,
+    proposed_amount: document.getElementById('proposedAmount').value || null,
+    interview_link: interview_link,
+    proposed_time: document.getElementById('proposedTime').value || null
+  })}).then(function(){
+    showToast('Interview invite sent (check Render logs if email is not configured yet)');
+    closeEngageModal(); renderTalent(); renderEngagements();
+  }).catch(function(err){ showToast('Engage failed: ' + err.message, true); });
 };
 
-/* CONTRACTS */
-async function renderContracts(){
+/* ENGAGEMENTS */
+function renderEngagements(){
   if(!connected) return;
-  try{
-    const data = await api('/v1/contracts');
-    const tbody = document.getElementById('contractsTableBody');
-    tbody.innerHTML = data.results.length ? data.results.map(c=>`
-      <tr><td class="mono">${c.contract_id}</td><td>${c.talent_name}</td><td>${c.employer_country}</td>
-      <td class="mono">${c.employer_currency}</td><td class="mono" style="font-size:11px;">${c.tax_form}</td>
-      <td><span class="status-pill status-pending">${c.status}</span></td></tr>`).join('')
-      : `<tr><td colspan="6" class="empty-state">// no contracts yet</td></tr>`;
-  }catch(err){ showToast('Failed to load contracts: ' + err.message, true); }
+  api('/v1/engagements').then(function(data){
+    var tbody = document.getElementById('engagementsTableBody');
+    var rows = data.results.slice().reverse();
+    tbody.innerHTML = rows.length ? rows.map(function(e){
+      var actionCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      if(e.status === 'interview_invited'){
+        actionCell = '<button class="btn-teal" onclick="simulateInterviewAccept(\''+e.engagement_id+'\',\''+e.accept_token+'\')">Simulate: talent accepts interview</button>';
+      } else if(e.status === 'interview_accepted'){
+        actionCell = '<button class="btn-teal" onclick="sendContract(\''+e.engagement_id+'\')">Send Contract</button>';
+      }
+      return '<tr><td>'+e.talent_name+'</td>'
+        + '<td><a href="'+e.interview_link+'" target="_blank" style="color:var(--teal); font-size:11px;">'+e.interview_link.slice(0,40)+'...</a></td>'
+        + '<td><span class="status-pill status-'+e.status+'">'+e.status+'</span></td>'
+        + '<td>'+actionCell+'</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="empty-state">// no engagements yet - start from Talent Pool</td></tr>';
+  }).catch(function(err){ showToast('Failed to load engagements: ' + err.message, true); });
+}
+document.getElementById('refreshEngagementsBtn').onclick = renderEngagements;
+
+function simulateInterviewAccept(engagementId, token){
+  publicGet(BASE_URL + '/v1/engagements/' + engagementId + '/accept?token=' + token).then(function(){
+    showToast('Interview accepted (simulated as the talent)');
+    renderEngagements();
+  }).catch(function(err){ showToast('Failed: ' + err.message, true); });
+}
+
+function sendContract(engagementId){
+  api('/v1/engagements/' + engagementId + '/contract', { method:'POST' }).then(function(){
+    showToast('Contract sent to talent');
+    renderEngagements(); renderContracts();
+  }).catch(function(err){ showToast('Failed to send contract: ' + err.message, true); });
+}
+
+/* CONTRACTS */
+function renderContracts(){
+  if(!connected) return;
+  api('/v1/contracts').then(function(data){
+    var tbody = document.getElementById('contractsTableBody');
+    var rows = data.results.slice().reverse();
+    tbody.innerHTML = rows.length ? rows.map(function(c){
+      var actionCell = c.status === 'pending_talent_signature'
+        ? '<button class="btn-teal" onclick="simulateContractAccept(\''+c.contract_id+'\',\''+c.accept_token+'\')">Simulate: talent accepts contract</button>'
+        : '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      return '<tr><td class="mono">'+c.contract_id+'</td><td>'+c.talent_name+'</td>'
+        + '<td class="mono">'+(c.proposed_amount ? c.proposed_amount + ' ' + c.employer_currency : '-')+'</td>'
+        + '<td><span class="status-pill status-'+c.status+'">'+c.status+'</span></td>'
+        + '<td>'+actionCell+'</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="empty-state">// no contracts yet - send one from Engagements</td></tr>';
+  }).catch(function(err){ showToast('Failed to load contracts: ' + err.message, true); });
 }
 document.getElementById('refreshContractsBtn').onclick = renderContracts;
 
-/* PAYROLL */
-async function refreshPayrollSelect(){
-  if(!connected) return;
-  try{
-    const data = await api('/v1/contracts');
-    const sel = document.getElementById('payrollContractSelect');
-    sel.innerHTML = data.results.length ? data.results.map(c=>`<option value="${c.contract_id}">${c.contract_id} — ${c.talent_name} (${c.employer_currency})</option>`).join('') : `<option value="">No contracts</option>`;
-  }catch(err){ /* silent on tab switch */ }
+function simulateContractAccept(contractId, token){
+  publicGet(BASE_URL + '/v1/contracts/' + contractId + '/accept?token=' + token).then(function(){
+    showToast('Contract accepted (simulated as the talent) - now active');
+    renderContracts(); renderTalent(); refreshPayrollSelect();
+  }).catch(function(err){ showToast('Failed: ' + err.message, true); });
 }
 
-document.getElementById('runPayrollBtn').onclick = async ()=>{
-  const contract_id = document.getElementById('payrollContractSelect').value;
-  const amount = parseFloat(document.getElementById('payrollAmount').value);
-  if(!contract_id){ showToast('No contract selected', true); return; }
+/* PAYROLL - only ACTIVE contracts */
+function refreshPayrollSelect(){
+  if(!connected) return;
+  api('/v1/contracts').then(function(data){
+    var active = data.results.filter(function(c){ return c.status === 'active'; });
+    var sel = document.getElementById('payrollContractSelect');
+    sel.innerHTML = active.length ? active.map(function(c){
+      return '<option value="'+c.contract_id+'">'+c.contract_id+' - '+c.talent_name+' ('+c.employer_currency+')</option>';
+    }).join('') : '<option value="">No active contracts yet</option>';
+  }).catch(function(){});
+}
+
+document.getElementById('runPayrollBtn').onclick = function(){
+  var contract_id = document.getElementById('payrollContractSelect').value;
+  var amount = parseFloat(document.getElementById('payrollAmount').value);
+  if(!contract_id){ showToast('No active contract selected', true); return; }
   if(!amount || amount<=0){ showToast('Enter a valid amount', true); return; }
-  try{
-    const p = await api('/v1/payroll/disburse', { method:'POST', body: JSON.stringify({
-      contract_id, amount, idempotency_key: 'console-' + contract_id + '-' + Date.now()
-    })});
-    const fxTag = p.fx_source.startsWith('live') ? `<span class="fx-tag live">live rate</span>` : `<span class="fx-tag fallback">fallback rate</span>`;
-    document.getElementById('payrollResult').innerHTML = `
-      <div class="receipt">
-        <div class="receipt-row"><span class="k">payout_id</span><span class="v">${p.payout_id}</span></div>
-        <div class="receipt-row"><span class="k">fx_rate</span><span class="v">${p.fx_rate} ${fxTag}</span></div>
-        <div class="receipt-row"><span class="k">gross (${p.employer_currency})</span><span class="v">${p.gross_amount_employer_currency}</span></div>
-        <div class="receipt-row"><span class="k">net_to_talent_ngn</span><span class="v">₦${Number(p.net_amount_ngn).toLocaleString()}</span></div>
-        <div class="receipt-row"><span class="k">platform_fee</span><span class="v">${p.platform_fee}</span></div>
-        <div class="receipt-row"><span class="k">care_wallet_funded</span><span class="v">${p.care_wallet_funded}</span></div>
-        <div class="receipt-row total"><span class="k">employer_total_charged</span><span class="v">${p.employer_total_charged}</span></div>
-      </div>`;
+  api('/v1/payroll/disburse', { method:'POST', body: JSON.stringify({
+    contract_id: contract_id, amount: amount, idempotency_key: 'console-' + contract_id + '-' + Date.now()
+  })}).then(function(p){
+    var fxTag = p.fx_source.indexOf('live') === 0 ? '<span class="fx-tag live">live rate</span>' : '<span class="fx-tag fallback">fallback rate</span>';
+    document.getElementById('payrollResult').innerHTML =
+      '<div class="receipt">'
+      + '<div class="receipt-row"><span class="k">payout_id</span><span class="v">'+p.payout_id+'</span></div>'
+      + '<div class="receipt-row"><span class="k">fx_rate</span><span class="v">'+p.fx_rate+' '+fxTag+'</span></div>'
+      + '<div class="receipt-row"><span class="k">gross ('+p.employer_currency+')</span><span class="v">'+p.gross_amount_employer_currency+'</span></div>'
+      + '<div class="receipt-row"><span class="k">net_to_talent_ngn</span><span class="v">' + Number(p.net_amount_ngn).toLocaleString() + '</span></div>'
+      + '<div class="receipt-row"><span class="k">platform_fee</span><span class="v">'+p.platform_fee+'</span></div>'
+      + '<div class="receipt-row"><span class="k">care_wallet_funded</span><span class="v">'+p.care_wallet_funded+'</span></div>'
+      + '<div class="receipt-row total"><span class="k">employer_total_charged</span><span class="v">'+p.employer_total_charged+'</span></div>'
+      + '</div>';
     showToast('Payroll settled');
     document.getElementById('payrollAmount').value = '';
     renderLedger();
-  }catch(err){ showToast('Disburse failed: ' + err.message, true); }
+  }).catch(function(err){ showToast('Disburse failed: ' + err.message, true); });
 };
 
 /* LEDGER */
-async function renderLedger(){
+function renderLedger(){
   if(!connected) return;
-  try{
-    const data = await api('/v1/ledger');
+  api('/v1/ledger').then(function(data){
     document.getElementById('statCount').textContent = data.payout_count;
     document.getElementById('statRevenue').textContent = '$' + data.total_revenue.toFixed(2);
     document.getElementById('statWallet').textContent = '$' + data.total_care_wallet.toFixed(2);
-    document.getElementById('statVolume').textContent = Object.entries(data.total_volume_by_currency).map(([c,v])=>`${c} ${v.toFixed(0)}`).join(' · ') || '—';
-    const tbody = document.getElementById('ledgerTableBody');
-    tbody.innerHTML = data.payouts.length ? data.payouts.map(p=>`
-      <tr><td class="mono">${p.payout_id}</td><td>${p.talent_name}</td>
-      <td class="mono">${p.employer_currency} ${p.gross_amount_employer_currency}</td>
-      <td class="mono">₦${Number(p.net_amount_ngn).toLocaleString()}</td>
-      <td class="mono">${p.fx_rate}</td>
-      <td><span class="status-pill status-settled">${p.status}</span></td></tr>`).join('')
-      : `<tr><td colspan="6" class="empty-state">// no payouts yet</td></tr>`;
-  }catch(err){ showToast('Failed to load ledger: ' + err.message, true); }
+    var volParts = [];
+    for(var cur in data.total_volume_by_currency){ volParts.push(cur + ' ' + data.total_volume_by_currency[cur].toFixed(0)); }
+    document.getElementById('statVolume').textContent = volParts.join(' | ') || '-';
+    var tbody = document.getElementById('ledgerTableBody');
+    tbody.innerHTML = data.payouts.length ? data.payouts.map(function(p){
+      return '<tr><td class="mono">'+p.payout_id+'</td><td>'+p.talent_name+'</td>'
+        + '<td class="mono">'+p.employer_currency+' '+p.gross_amount_employer_currency+'</td>'
+        + '<td class="mono">' + Number(p.net_amount_ngn).toLocaleString() + '</td>'
+        + '<td class="mono">'+p.fx_rate+'</td>'
+        + '<td><span class="status-pill status-settled">'+p.status+'</span></td></tr>';
+    }).join('') : '<tr><td colspan="6" class="empty-state">// no payouts yet</td></tr>';
+  }).catch(function(err){ showToast('Failed to load ledger: ' + err.message, true); });
 }
 document.getElementById('refreshLedgerBtn').onclick = renderLedger;
+
+window.addEventListener('DOMContentLoaded', function(){ document.getElementById('connectBtn').click(); });
 </script>
 
 </body>

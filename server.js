@@ -539,6 +539,9 @@ app.post('/v1/payroll/disburse', async (req, res) => {
 
   const contract = db.contracts.get(contract_id);
   if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status !== 'active') {
+    return res.status(409).json({ error: 'contract_not_active', message: `Contract is "${contract.status}" — the talent must accept the contract before payroll can run.` });
+  }
 
   // idempotency: if this key was already processed BY THIS CLIENT, return the original result
   if (idempotency_key) {
