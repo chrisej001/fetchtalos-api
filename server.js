@@ -62,14 +62,16 @@ function requireApiKey(req, res, next) {
  * Swap this for Postgres/whatever once this stops being a prototype.
  * Shape matches openapi.yaml exactly.
  * ---------------------------------------------------------------------- */
+const SEED_TALENTS = [
+  { talent_id: 'tal_0x91af', name: 'Chinedu O.', email: 'chinedu.demo@example.com', stack: ['Node', 'Postgres', 'Go'], pipeline: 'ALX Africa', country: 'NG', vetted_score: 92, status: 'available' },
+  { talent_id: 'tal_0x7c3d', name: 'Amara N.', email: 'amara.demo@example.com', stack: ['React', 'TypeScript'], pipeline: 'AltSchool Africa', country: 'NG', vetted_score: 88, status: 'available' },
+  { talent_id: 'tal_0x2b19', name: 'Kwame A.', email: 'kwame.demo@example.com', stack: ['Python', 'Django'], pipeline: 'ALX Africa', country: 'GH', vetted_score: 85, status: 'available' },
+  { talent_id: 'tal_0x5e77', name: 'Tolu F.', email: 'tolu.demo@example.com', stack: ['Rust', 'WASM'], pipeline: 'Nithub', country: 'NG', vetted_score: 94, status: 'available' },
+  { talent_id: 'tal_0x8f22', name: 'Ifeoma C.', email: 'ifeoma.demo@example.com', stack: ['Node', 'React', 'AWS'], pipeline: 'AltSchool Africa', country: 'NG', vetted_score: 90, status: 'available' },
+];
+
 const db = {
-  talents: [
-    { talent_id: 'tal_0x91af', name: 'Chinedu O.', email: 'chinedu.demo@example.com', stack: ['Node', 'Postgres', 'Go'], pipeline: 'ALX Africa', country: 'NG', vetted_score: 92, status: 'available' },
-    { talent_id: 'tal_0x7c3d', name: 'Amara N.', email: 'amara.demo@example.com', stack: ['React', 'TypeScript'], pipeline: 'AltSchool Africa', country: 'NG', vetted_score: 88, status: 'available' },
-    { talent_id: 'tal_0x2b19', name: 'Kwame A.', email: 'kwame.demo@example.com', stack: ['Python', 'Django'], pipeline: 'ALX Africa', country: 'GH', vetted_score: 85, status: 'available' },
-    { talent_id: 'tal_0x5e77', name: 'Tolu F.', email: 'tolu.demo@example.com', stack: ['Rust', 'WASM'], pipeline: 'Nithub', country: 'NG', vetted_score: 94, status: 'available' },
-    { talent_id: 'tal_0x8f22', name: 'Ifeoma C.', email: 'ifeoma.demo@example.com', stack: ['Node', 'React', 'AWS'], pipeline: 'AltSchool Africa', country: 'NG', vetted_score: 90, status: 'available' },
-  ],
+  talents: SEED_TALENTS,
   engagements: new Map(), // the interview-invite stage — created BEFORE any contract exists
   contracts: new Map(),
   payouts: new Map(),
@@ -192,7 +194,23 @@ async function loadState() {
     if (data?.result) {
       const snapshot = JSON.parse(data.result);
       Object.assign(KEYS, snapshot.keys || {});
-      if (snapshot.talents?.length) db.talents = snapshot.talents;
+      if (snapshot.talents?.length) {
+        // MIGRATION GUARD: a persisted snapshot saved before a field existed
+        // (e.g. "email", added after persistence was already live) would
+        // otherwise silently overwrite the current code's data and reintroduce
+        // bugs that look fixed but aren't. Backfill any missing fields from
+        // the seed data by talent_id before trusting the persisted version.
+        let backfilled = 0;
+        db.talents = snapshot.talents.map(t => {
+          const seed = SEED_TALENTS.find(s => s.talent_id === t.talent_id);
+          if (seed) {
+            const missing = Object.keys(seed).filter(k => t[k] === undefined);
+            if (missing.length) { backfilled++; return { ...seed, ...t }; } // seed fills gaps, persisted values win where both exist
+          }
+          return t;
+        });
+        if (backfilled) console.warn(`[persistence] backfilled missing fields on ${backfilled} talent(s) from seed data — persisted snapshot predated a schema change`);
+      }
       if (snapshot.engagements) db.engagements = new Map(snapshot.engagements);
       if (snapshot.contracts) db.contracts = new Map(snapshot.contracts);
       if (snapshot.payouts) db.payouts = new Map(snapshot.payouts);
@@ -260,13 +278,14 @@ app.get('/admin/keys', requireAdminKey, (req, res) => {
 // calling this by hand; a hub's own onboarding flow would call it too,
 // eventually.
 app.post('/admin/talents', requireAdminKey, async (req, res) => {
-  const { name, stack, pipeline, country, vetted_score } = req.body || {};
-  if (!name || !pipeline || !country) {
-    return res.status(400).json({ error: 'name, pipeline, and country are required' });
+  const { name, email, stack, pipeline, country, vetted_score } = req.body || {};
+  if (!name || !email || !pipeline || !country) {
+    return res.status(400).json({ error: 'name, email, pipeline, and country are required' });
   }
   const talent = {
     talent_id: id('tal'),
     name,
+    email,
     stack: Array.isArray(stack) ? stack : [],
     pipeline,
     country,
@@ -393,6 +412,9 @@ app.post('/v1/engagements/create', async (req, res) => {
   const talent = db.talents.find(t => t.talent_id === talent_id);
   if (!talent) return res.status(404).json({ error: 'talent_not_found' });
   if (talent.status !== 'available') return res.status(409).json({ error: 'talent_not_available' });
+  if (!talent.email) {
+    return res.status(422).json({ error: 'talent_missing_email', message: `${talent.name} has no email on file — use PATCH /admin/talents/${talent.talent_id} to set one before engaging them.` });
+  }
 
   const engagement_id = id('eng');
   const accept_token = crypto.randomBytes(12).toString('hex');
