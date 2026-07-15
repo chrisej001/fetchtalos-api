@@ -152,6 +152,7 @@
       <div class="panel-head"><h2>Add a talent</h2><p class="sub">POST /admin/talents</p></div>
       <div class="form-grid">
         <div class="field"><label>Name</label><input id="talentName" placeholder="e.g. Bola S."></div>
+        <div class="field"><label>Email (required — where interview/contract emails actually go)</label><input id="talentEmail" type="email" placeholder="e.g. bola@example.com"></div>
         <div class="field"><label>Pipeline (which hub they belong to)</label><input id="talentPipeline" placeholder="e.g. ALX Africa"></div>
         <div class="field"><label>Country</label><input id="talentCountry" placeholder="e.g. NG"></div>
         <div class="field"><label>Vetted score (0-100)</label><input id="talentScore" type="number" placeholder="e.g. 88"></div>
@@ -163,8 +164,8 @@
       <div class="panel-head" style="margin-top:34px;"><h2>Full talent pool</h2><p class="sub">GET /admin/talents — unfiltered, includes engaged</p></div>
       <button class="row-btn" id="refreshTalentsBtn" style="margin-bottom:14px;">↻ Refresh</button>
       <div class="tbl-wrap">
-        <table><thead><tr><th>Talent</th><th>Stack</th><th>Pipeline</th><th>Country</th><th>Score</th><th>Status</th></tr></thead>
-        <tbody id="talentsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
+        <table><thead><tr><th>Talent</th><th>Email</th><th>Stack</th><th>Pipeline</th><th>Country</th><th>Score</th><th>Status</th></tr></thead>
+        <tbody id="talentsTableBody"><tr><td colspan="7" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
   </main>
@@ -291,28 +292,30 @@ async function loadTalents(){
     const tbody = document.getElementById('talentsTableBody');
     tbody.innerHTML = data.results.length ? data.results.map(t=>`
       <tr><td><strong>${t.name}</strong><br><span style="color:var(--text-faint);font-family:'IBM Plex Mono',monospace;font-size:10px;">${t.talent_id}</span></td>
+      <td class="mono" style="font-size:11px;">${t.email || '<span style="color:var(--red);">missing</span>'}</td>
       <td>${t.stack.map(s=>`<span class="stack-tag">${s}</span>`).join('')}</td>
       <td style="color:var(--text-muted);">${t.pipeline}</td>
       <td class="mono">${t.country}</td>
       <td class="mono">${t.vetted_score}</td>
       <td><span class="status-pill status-${t.status}">${t.status}</span></td></tr>`).join('')
-      : `<tr><td colspan="6" class="empty-state">// no talent yet</td></tr>`;
+      : `<tr><td colspan="7" class="empty-state">// no talent yet</td></tr>`;
   }catch(err){ showToast('Failed to load talents: ' + err.message, true); }
 }
 document.getElementById('refreshTalentsBtn').onclick = loadTalents;
 
 document.getElementById('addTalentBtn').onclick = async ()=>{
   const name = document.getElementById('talentName').value.trim();
+  const email = document.getElementById('talentEmail').value.trim();
   const pipeline = document.getElementById('talentPipeline').value.trim();
   const country = document.getElementById('talentCountry').value.trim();
   const vetted_score = document.getElementById('talentScore').value;
   const stack = document.getElementById('talentStack').value.split(',').map(s=>s.trim()).filter(Boolean);
-  if(!name || !pipeline || !country){ showToast('Name, pipeline, and country are required', true); return; }
+  if(!name || !email || !pipeline || !country){ showToast('Name, email, pipeline, and country are required', true); return; }
   try{
-    const talent = await api('/admin/talents', { method:'POST', body: JSON.stringify({ name, pipeline, country, vetted_score, stack }) });
+    const talent = await api('/admin/talents', { method:'POST', body: JSON.stringify({ name, email, pipeline, country, vetted_score, stack }) });
     document.getElementById('addTalentResult').innerHTML = `<div class="result-box"><span class="k">created:</span> ${talent.name} (${talent.talent_id})</div>`;
     showToast('Talent added');
-    ['talentName','talentPipeline','talentCountry','talentScore','talentStack'].forEach(id=>document.getElementById(id).value='');
+    ['talentName','talentEmail','talentPipeline','talentCountry','talentScore','talentStack'].forEach(id=>document.getElementById(id).value='');
     loadTalents();
   }catch(err){ showToast('Failed to add talent: ' + err.message, true); }
 };
