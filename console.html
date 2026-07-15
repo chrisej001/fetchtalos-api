@@ -200,6 +200,8 @@
     <button class="modal-close" id="closeEngageModal">X</button>
     <h3 id="engageModalTitle">Engage</h3>
     <p class="modal-sub">POST /v1/engagements/create &mdash; sends an interview invite</p>
+    <div class="field"><label>Employer / company name</label><input id="employerName" placeholder="e.g. Acme Corp" value="Acme Corp"></div>
+    <div class="field"><label>Role title</label><input id="roleTitle" placeholder="e.g. Backend Engineer" value="Backend Engineer"></div>
     <div class="field"><label>Employer country</label>
       <select id="employerCountrySelect"><option value="US">United States</option><option value="UK">United Kingdom</option><option value="DE">Germany</option><option value="CA">Canada</option></select>
     </div>
@@ -212,6 +214,7 @@
     <div class="field"><label>Proposed monthly amount</label><input id="proposedAmount" type="number" placeholder="e.g. 2400"></div>
     <div class="field"><label>Interview link (Calendly, Zoom, Meet - your choice)</label><input id="interviewLink" placeholder="https://calendly.com/you/interview" value="https://calendly.com/acme-corp/interview"></div>
     <div class="field"><label>Proposed time (optional, freeform)</label><input id="proposedTime" placeholder="e.g. Thursday 3pm WAT"></div>
+    <div class="field"><label>KPIs (optional, one per line)</label><textarea id="kpisInput" rows="3" placeholder="Ship the payments redesign by Q1&#10;Maintain 99.9% uptime" style="width:100%; background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:8px 11px; border-radius:7px; font-size:12.5px; font-family:'Inter',sans-serif; resize:vertical;"></textarea></div>
     <div class="modal-actions">
       <button class="btn-primary" id="sendEngageBtn">Send interview invite</button>
       <button class="btn-secondary" id="cancelEngageBtn">Cancel</button>
@@ -310,15 +313,24 @@ function closeEngageModal(){ document.getElementById('engageModalOverlay').class
 document.getElementById('sendEngageBtn').onclick = function(){
   if(!pendingTalentId) return;
   var interview_link = document.getElementById('interviewLink').value.trim();
+  var employer_name = document.getElementById('employerName').value.trim();
+  var role_title = document.getElementById('roleTitle').value.trim();
   if(!interview_link){ showToast('Interview link is required', true); return; }
+  if(!employer_name){ showToast('Employer / company name is required', true); return; }
+  if(!role_title){ showToast('Role title is required', true); return; }
+  var kpisRaw = document.getElementById('kpisInput').value.trim();
+  var kpis = kpisRaw ? kpisRaw.split('\n').map(function(k){ return k.trim(); }).filter(Boolean) : null;
   api('/v1/engagements/create', { method:'POST', body: JSON.stringify({
     talent_id: pendingTalentId,
+    employer_name: employer_name,
+    role_title: role_title,
     employer_country: document.getElementById('employerCountrySelect').value,
     employer_currency: document.getElementById('employerCurrencySelect').value,
     coverage_plan: document.getElementById('coveragePlanSelect').value,
     proposed_amount: document.getElementById('proposedAmount').value || null,
     interview_link: interview_link,
-    proposed_time: document.getElementById('proposedTime').value || null
+    proposed_time: document.getElementById('proposedTime').value || null,
+    kpis: kpis
   })}).then(function(){
     showToast('Interview invite sent (check Render logs if email is not configured yet)');
     closeEngageModal(); renderTalent(); renderEngagements();
