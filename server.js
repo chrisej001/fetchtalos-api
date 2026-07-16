@@ -5,7 +5,7 @@ import PDFDocument from 'pdfkit';
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } })); // rawBody needed for webhook signature verification below
 
 /* ---------------------------------------------------------------------- *
  * AUTH — Stripe/Paystack-style bearer key. Two key TYPES now exist:
@@ -241,6 +241,157 @@ async function sendEmail({ to, subject, html, attachments }) {
 }
 
 /* ---------------------------------------------------------------------- *
+ * MYCOVER.AI — real health coverage, not a label. Two modes, matching
+ * Chris's own integration doc exactly:
+ *
+ * - "direct"  — calls MyCover.ai directly with your own MyCover keys.
+ *   Good for dev/sandbox. Set MYCOVER_SECRET_KEY.
+ * - "proxy"   — calls Felicity, which forwards to MyCover using Felicity's
+ *   live keys, so policies/commissions/refunds live under Felicity's one
+ *   KYC + ledger. Set FELICITY_PARTNER_KEY instead.
+ *
+ * Set MYCOVER_MODE=direct|proxy (defaults to direct). Both paths are
+ * OPTIONAL — with neither key configured, coverage purchase gracefully
+ * no-ops and coverage_status stays honestly labeled instead of faking
+ * success.
+ * ---------------------------------------------------------------------- */
+const MYCOVER_MODE = process.env.MYCOVER_MODE === 'proxy' ? 'proxy' : 'direct';
+const MYCOVER_SECRET_KEY = process.env.MYCOVER_SECRET_KEY;
+const FELICITY_PARTNER_KEY = process.env.FELICITY_PARTNER_KEY;
+const MYCOVER_CONFIGURED = MYCOVER_MODE === 'direct' ? Boolean(MYCOVER_SECRET_KEY) : Boolean(FELICITY_PARTNER_KEY);
+
+const MYCOVER_BASE = MYCOVER_MODE === 'direct'
+  ? 'https://v2.api.mycover.ai/v2'
+  : 'https://jtotljjdyhxjbbsnpuml.supabase.co/functions/v1';
+const MYCOVER_TOKEN = MYCOVER_MODE === 'direct' ? MYCOVER_SECRET_KEY : FELICITY_PARTNER_KEY;
+
+// Path map so calling code doesn't care which mode it's in — same shape as Chris's reference client.
+const MYCOVER_PATHS = MYCOVER_MODE === 'direct'
+  ? {
+      products: () => `/products`,
+      product: (id) => `/products/${encodeURIComponent(id)}`,
+      quote: () => `/products/quote`,
+      buy: () => `/products/buy`,
+      policy: (id) => `/policies/${encodeURIComponent(id)}`,
+      cancel: (id) => `/policies/${encodeURIComponent(id)}/cancel`,
+    }
+  : {
+      products: () => `/mycover-proxy-products`,
+      product: (id) => `/mycover-proxy-product?id=${encodeURIComponent(id)}`,
+      quote: () => `/mycover-proxy-quote`,
+      buy: () => `/mycover-proxy-buy`,
+      policy: (id) => `/mycover-proxy-policy?id=${encodeURIComponent(id)}`,
+      cancel: (id) => `/mycover-proxy-cancel?id=${encodeURIComponent(id)}`,
+    };
+
+async function mycoverCall(path, init = {}) {
+  const res = await fetch(`${MYCOVER_BASE}${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${MYCOVER_TOKEN}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
+  });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : null;
+  if (!res.ok) { const err = new Error(`mycover_${res.status}: ${text}`); err.status = res.status; throw err; }
+  return json;
+}
+
+const mycover = {
+  listProducts: () => mycoverCall(MYCOVER_PATHS.products()),
+  getProduct: (id) => mycoverCall(MYCOVER_PATHS.product(id)),
+  quote: (body) => mycoverCall(MYCOVER_PATHS.quote(), { method: 'POST', body: JSON.stringify(body) }),
+  buy: (body) => mycoverCall(MYCOVER_PATHS.buy(), { method: 'POST', body: JSON.stringify(body) }),
+  getPolicy: (id) => mycoverCall(MYCOVER_PATHS.policy(id)),
+  cancel: (id, body = {}) => mycoverCall(MYCOVER_PATHS.cancel(id), { method: 'POST', body: JSON.stringify(body) }),
+};
+
+// Coverage plan -> real MyCover product_id. These are YOUR live product IDs
+// once you've looked them up — use GET /admin/mycover/products to find them,
+// then set these three env vars. Until set, purchase is skipped gracefully.
+const COVERAGE_PRODUCT_IDS = {
+  remote_contractor_basic: process.env.MYCOVER_PRODUCT_ID_BASIC || null,
+  remote_contractor_plus: process.env.MYCOVER_PRODUCT_ID_PLUS || null,
+  remote_contractor_family: process.env.MYCOVER_PRODUCT_ID_FAMILY || null,
+};
+
+// MyCover doesn't always return a clean `status` field — this mirrors the
+// exact "treat as active" logic from the integration doc.
+function isPolicyActive(policyData) {
+  if (!policyData) return false;
+  if (policyData.is_active === true) return true;
+  if (typeof policyData.status === 'string' && /active|issued|sold|success|completed/i.test(policyData.status)) return true;
+  if (policyData.activation_date || policyData.start_date) {
+    const expired = policyData.expiration_date && new Date(policyData.expiration_date) < new Date();
+    return !expired;
+  }
+  return false;
+}
+
+/**
+ * Actually purchase real health coverage for a talent on contract
+ * acceptance. Gracefully no-ops (returns a clear status, never throws) if
+ * MyCover isn't configured or the product_id for this plan isn't set —
+ * the caller should never have a request fail because of this.
+ */
+async function purchaseCoverage({ talent, contract }) {
+  if (!MYCOVER_CONFIGURED) {
+    return { coverage_status: 'gap_not_wired', coverage_note: `MyCover not configured (MYCOVER_MODE=${MYCOVER_MODE}, no key set)` };
+  }
+  const product_id = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
+  if (!product_id) {
+    return { coverage_status: 'gap_not_wired', coverage_note: `No product_id mapped for plan "${contract.coverage_plan}" — set MYCOVER_PRODUCT_ID_* env vars` };
+  }
+  if (!talent.phone || !talent.dob || !talent.nin) {
+    return { coverage_status: 'gap_missing_kyc', coverage_note: 'Talent missing phone/dob/nin — required by MyCover to issue a policy. Use PATCH /admin/talents/:id to add them.' };
+  }
+
+  try {
+    const result = await mycover.buy({
+      product_id,
+      payment_plan: 'annually',
+      bought_for_self: true,
+      customer_email: talent.email,
+      customer_phone: talent.phone,
+      customer_first_name: talent.name.split(' ')[0],
+      customer_last_name: talent.name.split(' ').slice(1).join(' ') || talent.name.split(' ')[0],
+      customer_dob: talent.dob,
+      customer_nin: talent.nin,
+      ...(talent.image_url ? { image_url: talent.image_url } : {}),
+    });
+
+    const policyData = result?.data || result;
+    const active = isPolicyActive(policyData);
+    return {
+      coverage_status: active ? 'active' : 'pending_activation',
+      coverage_policy_id: policyData?.essential?.policy_id || policyData?.policy_id || policyData?.id || null,
+      coverage_reference: result?.felicity_reference || null, // proxy mode only
+      coverage_product_id: product_id,
+      coverage_note: null,
+    };
+  } catch (err) {
+    console.warn('[mycover] purchase failed:', err.message);
+    return { coverage_status: 'purchase_failed', coverage_note: err.message };
+  }
+}
+
+/**
+ * Verifies a MyCover/Felicity webhook signature — exact logic from the
+ * integration doc, both modes.
+ */
+function verifyMycoverWebhook(rawBody, headers, secret) {
+  if (MYCOVER_MODE === 'direct') {
+    const sig = headers['x-mycoverai-signature'] || headers['x-mycover-signature'] || headers['x-signature'] || headers['signature'];
+    if (!sig) return false;
+    const h = crypto.createHmac('sha512', secret).update(rawBody).digest('hex');
+    return sig === secret || sig.toLowerCase() === h;
+  } else {
+    const sig = headers['x-felicity-signature'];
+    if (!sig) return false;
+    const h = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+    return sig.toLowerCase() === h;
+  }
+}
+
+/* ---------------------------------------------------------------------- *
  * PERSISTENCE — without this, EVERYTHING resets on every restart, and
  * Render's free tier restarts the process after just 15 minutes of
  * inactivity (not only on deploys). That's fine for talents/contracts/
@@ -409,6 +560,45 @@ app.patch('/admin/talents/:id', requireAdminKey, async (req, res) => {
   Object.assign(talent, req.body || {});
   await saveState();
   res.json(talent);
+});
+
+// GET /admin/mycover/status — is coverage configured at all, and how
+app.get('/admin/mycover/status', requireAdminKey, (req, res) => {
+  res.json({
+    mode: MYCOVER_MODE,
+    configured: MYCOVER_CONFIGURED,
+    product_ids: COVERAGE_PRODUCT_IDS,
+    note: MYCOVER_CONFIGURED
+      ? (Object.values(COVERAGE_PRODUCT_IDS).every(v => !v) ? 'Key is set but no product_id mapped yet — call GET /admin/mycover/products to find real ones, then set MYCOVER_PRODUCT_ID_* env vars.' : 'Ready.')
+      : `Not configured — set ${MYCOVER_MODE === 'direct' ? 'MYCOVER_SECRET_KEY' : 'FELICITY_PARTNER_KEY'} (and MYCOVER_MODE if you want the other mode).`
+  });
+});
+
+// GET /admin/mycover/products — real catalog, use this to find product_ids
+// to paste into MYCOVER_PRODUCT_ID_BASIC/PLUS/FAMILY.
+app.get('/admin/mycover/products', requireAdminKey, async (req, res) => {
+  if (!MYCOVER_CONFIGURED) return res.status(422).json({ error: 'mycover_not_configured' });
+  try {
+    const data = await mycover.listProducts();
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: 'mycover_request_failed', message: err.message });
+  }
+});
+
+// POST /admin/mycover/retry/:contractId — retry a failed/skipped coverage
+// purchase for an already-accepted contract (e.g. after fixing missing KYC
+// fields or setting a product_id for the first time).
+app.post('/admin/mycover/retry/:contractId', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status !== 'active') return res.status(409).json({ error: 'contract_not_active', message: 'Talent must have accepted the contract first.' });
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (!talent) return res.status(404).json({ error: 'talent_not_found' });
+  const coverage = await purchaseCoverage({ talent, contract });
+  Object.assign(contract, coverage);
+  await saveState();
+  res.json(contract);
 });
 
 // GET /admin/overview — see EVERYTHING across EVERY client at once. This is
@@ -586,7 +776,11 @@ app.post('/v1/engagements/:id/contract', async (req, res) => {
     tax_form: taxFormMap[engagement.employer_country] || 'local_equivalent_required',
     coverage_plan: engagement.coverage_plan,
     kyc_status: 'pending', // would flip to verified/failed via Bridgecard webhook in production
-    coverage_status: 'gap_not_wired', // see ARCHITECTURE.md — MyCover purchase endpoint needs distributor access
+    coverage_status: 'not_yet_purchased', // real purchase happens when the talent ACCEPTS the contract, not before
+    coverage_policy_id: null,
+    coverage_reference: null,
+    coverage_product_id: null,
+    coverage_note: null,
     status: 'pending_talent_signature', // flips to 'active' only when the TALENT accepts below
     accept_token,
     created_at: new Date().toISOString(),
@@ -637,9 +831,21 @@ app.get('/v1/contracts/:id/accept', async (req, res) => {
     if (talent) talent.status = 'engaged';
     const engagement = contract.engagement_id ? db.engagements.get(contract.engagement_id) : null;
     if (engagement) engagement.status = 'contract_accepted';
+
+    // Real coverage purchase happens NOW — this is the point the talent has
+    // actually committed, which is the right moment to spend money on them.
+    if (talent) {
+      const coverage = await purchaseCoverage({ talent, contract });
+      Object.assign(contract, coverage);
+    }
+
     await saveState();
   }
-  res.send(`<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. Your first payroll run will follow this contract's terms.</p>`);
+  const coverageLine = contract.coverage_status === 'active'
+    ? `Your health coverage is active — policy ${contract.coverage_policy_id || ''}.`
+    : contract.coverage_status === 'not_yet_purchased' ? ''
+    : `Coverage status: ${contract.coverage_status}.`;
+  res.send(`<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. Your first payroll run will follow this contract's terms. ${coverageLine}</p>`);
 });
 
 // GET /v1/engagements — list, scoped to requesting client
@@ -745,6 +951,47 @@ app.get('/v1/ledger', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'fetchtalos-api', time: new Date().toISOString(), persistence: PERSISTENCE_ENABLED ? 'enabled' : 'in-memory-only' }));
+
+/* ---------------------------------------------------------------------- *
+ * POST /webhooks/mycover — PUBLIC (MyCover/Felicity call this, they don't
+ * have a FetchTalos API key). Register this URL wherever MyCover.ai's
+ * dashboard or Felicity's partner settings ask for a webhook_url:
+ *   https://fetchtalos.onrender.com/webhooks/mycover
+ * Set MYCOVER_WEBHOOK_SECRET to whatever secret you register alongside it.
+ *
+ * Matches an incoming event to a contract by (in order): felicity_reference
+ * (proxy mode), then policy_id — same priority as the integration doc.
+ * Without MYCOVER_WEBHOOK_SECRET set, requests are rejected outright rather
+ * than trusted unverified.
+ * ---------------------------------------------------------------------- */
+app.post('/webhooks/mycover', async (req, res) => {
+  const secret = process.env.MYCOVER_WEBHOOK_SECRET;
+  if (!secret) return res.status(503).json({ error: 'webhook_not_configured', message: 'Set MYCOVER_WEBHOOK_SECRET to enable this endpoint.' });
+
+  const valid = verifyMycoverWebhook(req.rawBody, req.headers, secret);
+  if (!valid) return res.status(401).json({ error: 'invalid_signature' });
+
+  const { event, felicity_reference, data } = req.body || {};
+  const policyId = data?.essential?.policy_id || data?.policy?.id || null;
+
+  const contract = [...db.contracts.values()].find(c =>
+    (felicity_reference && c.coverage_reference === felicity_reference) ||
+    (policyId && c.coverage_policy_id === policyId)
+  );
+
+  if (!contract) {
+    console.warn(`[mycover webhook] event "${event}" didn't match any contract (felicity_reference=${felicity_reference}, policy_id=${policyId})`);
+    return res.status(200).json({ received: true, matched: false }); // 200 so MyCover/Felicity doesn't retry forever on an event we'll never match
+  }
+
+  if (/purchase\.successful|policy\.activated/.test(event || '')) contract.coverage_status = 'active';
+  else if (/purchase\.failed|policy\.failed/.test(event || '')) contract.coverage_status = 'purchase_failed';
+  else if (/policy\.cancelled/.test(event || '')) contract.coverage_status = 'cancelled';
+  else if (/policy\.expired/.test(event || '')) contract.coverage_status = 'expired';
+
+  await saveState();
+  res.status(200).json({ received: true, matched: true, contract_id: contract.contract_id, new_status: contract.coverage_status });
+});
 
 const PORT = process.env.PORT || 3000;
 await loadState(); // restore prior state (if persistence is configured) BEFORE accepting traffic
