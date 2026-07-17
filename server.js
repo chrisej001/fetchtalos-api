@@ -159,6 +159,7 @@ function generateOfferLetterPdf({ engagement, contract }) {
     doc.moveDown(0.3);
     doc.font('Helvetica').fontSize(10.5);
     doc.text(`Coverage plan: ${plan.label}`);
+    doc.text(`Coverage duration: ${engagement.coverage_months || 1} month(s), prepaid`);
     plan.benefits.forEach(b => doc.text(`•  ${b}`));
     doc.moveDown(1.2);
 
@@ -344,10 +345,24 @@ async function purchaseCoverage({ talent, contract }) {
     return { coverage_status: 'gap_missing_kyc', coverage_note: 'Talent missing phone/dob/nin — required by MyCover to issue a policy. Use PATCH /admin/talents/:id to add them.' };
   }
 
+  // Coverage is always purchased for the talent individually — matches
+  // Felicity's own Team Care flow: one plan, one person, N months. There is
+  // no "family" product; the FetchTalos plan tier (basic/plus/family) only
+  // controls WHICH product is bought, not how many people it covers.
+  const months = Number(contract.coverage_months) || 1;
+
   try {
+    // Look up the real base_price so the amount actually matches the plan —
+    // don't trust a stale cached price from whenever the product ID was chosen.
+    const productDetail = await mycover.getProduct(product_id);
+    const basePrice = Number(productDetail?.data?.base_price || productDetail?.base_price);
+    if (!basePrice) throw new Error(`Could not read base_price for product ${product_id}`);
+    const amount = Math.round(basePrice * months);
+
     const result = await mycover.buy({
       product_id,
-      payment_plan: process.env.MYCOVER_PAYMENT_PLAN || 'annually', // your Bastion Health products price "per 30 days" — check GET /admin/mycover/products/:id for the exact valid payment_plan values before assuming, then set MYCOVER_PAYMENT_PLAN if it's not "annually"
+      payment_plan: months, // NOTE: this field appears to actually be a month-count integer (1-12) for Bastion Health products, not a string like "annually" — matches Felicity's own "select how many months" purchase flow. Verify on first live purchase.
+      amount,
       bought_for_self: true,
       customer_email: talent.email,
       customer_phone: talent.phone,
@@ -365,6 +380,8 @@ async function purchaseCoverage({ talent, contract }) {
       coverage_policy_id: policyData?.essential?.policy_id || policyData?.policy_id || policyData?.id || null,
       coverage_reference: result?.felicity_reference || null, // proxy mode only
       coverage_product_id: product_id,
+      coverage_months: months,
+      coverage_amount_paid: amount,
       coverage_note: null,
     };
   } catch (err) {
@@ -704,7 +721,7 @@ app.get('/v1/talents/discover', (req, res) => {
 app.post('/v1/engagements/create', async (req, res) => {
   const {
     talent_id, employer_name, role_title, employer_country, employer_currency = 'USD', coverage_plan = 'remote_contractor_basic',
-    proposed_amount, interview_link, proposed_time, message, kpis
+    coverage_months = 1, proposed_amount, interview_link, proposed_time, message, kpis
   } = req.body || {};
 
   if (!interview_link) return res.status(400).json({ error: 'interview_link is required — a Calendly/Zoom/Meet link, whatever the enterprise uses' });
@@ -726,7 +743,7 @@ app.post('/v1/engagements/create', async (req, res) => {
     talent_id,
     talent_name: talent.name,
     employer_name, role_title,
-    employer_country, employer_currency, coverage_plan, proposed_amount: proposed_amount ? Number(proposed_amount) : null,
+    employer_country, employer_currency, coverage_plan, coverage_months: Number(coverage_months) || 1, proposed_amount: proposed_amount ? Number(proposed_amount) : null,
     interview_link, proposed_time: proposed_time || null, message: message || null,
     kpis: Array.isArray(kpis) ? kpis : null,
     status: 'interview_invited', // interview_invited -> interview_accepted -> contract_sent -> contract_accepted
@@ -789,6 +806,7 @@ app.post('/v1/engagements/:id/contract', async (req, res) => {
     proposed_amount: engagement.proposed_amount,
     tax_form: taxFormMap[engagement.employer_country] || 'local_equivalent_required',
     coverage_plan: engagement.coverage_plan,
+    coverage_months: engagement.coverage_months || 1,
     kyc_status: 'pending', // would flip to verified/failed via Bridgecard webhook in production
     coverage_status: 'not_yet_purchased', // real purchase happens when the talent ACCEPTS the contract, not before
     coverage_policy_id: null,
