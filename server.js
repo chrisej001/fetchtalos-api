@@ -347,7 +347,7 @@ async function purchaseCoverage({ talent, contract }) {
   try {
     const result = await mycover.buy({
       product_id,
-      payment_plan: 'annually',
+      payment_plan: process.env.MYCOVER_PAYMENT_PLAN || 'annually', // your Bastion Health products price "per 30 days" — check GET /admin/mycover/products/:id for the exact valid payment_plan values before assuming, then set MYCOVER_PAYMENT_PLAN if it's not "annually"
       bought_for_self: true,
       customer_email: talent.email,
       customer_phone: talent.phone,
@@ -580,6 +580,20 @@ app.get('/admin/mycover/products', requireAdminKey, async (req, res) => {
   if (!MYCOVER_CONFIGURED) return res.status(422).json({ error: 'mycover_not_configured' });
   try {
     const data = await mycover.listProducts();
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: 'mycover_request_failed', message: err.message });
+  }
+});
+
+// GET /admin/mycover/products/:id — full detail for ONE product, including
+// beneficiary/dependent requirements. Use this before picking a plan for
+// the "family" tier specifically — a higher price doesn't by itself mean a
+// product supports covering dependents.
+app.get('/admin/mycover/products/:id', requireAdminKey, async (req, res) => {
+  if (!MYCOVER_CONFIGURED) return res.status(422).json({ error: 'mycover_not_configured' });
+  try {
+    const data = await mycover.getProduct(req.params.id);
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: 'mycover_request_failed', message: err.message });
