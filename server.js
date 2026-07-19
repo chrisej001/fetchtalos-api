@@ -333,6 +333,24 @@ function isPolicyActive(policyData) {
  * MyCover isn't configured or the product_id for this plan isn't set —
  * the caller should never have a request fail because of this.
  */
+// Maps a MyCover/Felicity `required_fields` name to how we'd source it from
+// a talent record. Add to this as new products declare fields we haven't
+// seen yet — don't assume every product wants the same shape.
+function resolveRequiredField(fieldName, talent) {
+  const map = {
+    customer_name: talent.name,
+    customer_first_name: talent.name?.split(' ')[0],
+    customer_last_name: talent.name?.split(' ').slice(1).join(' ') || talent.name?.split(' ')[0],
+    customer_email: talent.email,
+    customer_phone: talent.phone,
+    date_of_birth: talent.dob,
+    customer_dob: talent.dob,
+    customer_nin: talent.nin,
+    image_url: talent.image_url,
+  };
+  return map[fieldName];
+}
+
 async function purchaseCoverage({ talent, contract }) {
   if (!MYCOVER_CONFIGURED) {
     return { coverage_status: 'gap_not_wired', coverage_note: `MyCover not configured (MYCOVER_MODE=${MYCOVER_MODE}, no key set)` };
@@ -341,37 +359,51 @@ async function purchaseCoverage({ talent, contract }) {
   if (!product_id) {
     return { coverage_status: 'gap_not_wired', coverage_note: `No product_id mapped for plan "${contract.coverage_plan}" — set MYCOVER_PRODUCT_ID_* env vars` };
   }
-  if (!talent.phone || !talent.dob || !talent.nin) {
-    return { coverage_status: 'gap_missing_kyc', coverage_note: 'Talent missing phone/dob/nin — required by MyCover to issue a policy. Use PATCH /admin/talents/:id to add them.' };
-  }
 
-  // Coverage is always purchased for the talent individually — matches
-  // Felicity's own Team Care flow: one plan, one person, N months. There is
-  // no "family" product; the FetchTalos plan tier (basic/plus/family) only
-  // controls WHICH product is bought, not how many people it covers.
   const months = Number(contract.coverage_months) || 1;
 
   try {
-    // Look up the real base_price so the amount actually matches the plan —
-    // don't trust a stale cached price from whenever the product ID was chosen.
+    // Read the REAL product definition — don't assume field names or valid
+    // durations match some other product we looked at earlier. Different
+    // products (and different environments — sandbox vs. real catalog —
+    // as we learned the hard way) can have different shapes entirely.
     const productDetail = await mycover.getProduct(product_id);
-    const basePrice = Number(productDetail?.data?.base_price || productDetail?.base_price);
-    if (!basePrice) throw new Error(`Could not read base_price for product ${product_id}`);
-    const amount = Math.round(basePrice * months);
+    const product = productDetail?.data || productDetail;
+    if (!product) throw new Error(`Could not fetch product ${product_id}`);
 
-    const result = await mycover.buy({
-      product_id,
-      payment_plan: months, // NOTE: this field appears to actually be a month-count integer (1-12) for Bastion Health products, not a string like "annually" — matches Felicity's own "select how many months" purchase flow. Verify on first live purchase.
-      amount,
-      bought_for_self: true,
-      customer_email: talent.email,
-      customer_phone: talent.phone,
-      customer_first_name: talent.name.split(' ')[0],
-      customer_last_name: talent.name.split(' ').slice(1).join(' ') || talent.name.split(' ')[0],
-      customer_dob: talent.dob,
-      customer_nin: talent.nin,
-      ...(talent.image_url ? { image_url: talent.image_url } : {}),
-    });
+    const basePremium = Number(product.base_premium ?? product.base_price);
+    if (!basePremium) throw new Error(`Could not read a premium/price field for product ${product_id}`);
+
+    // Validate the requested duration against what this SPECIFIC product
+    // actually allows — e.g. this sandbox's family plan doesn't offer a
+    // 1-month option even though the basic plan does.
+    if (Array.isArray(product.duration_options) && product.duration_options.length && !product.duration_options.includes(months)) {
+      return {
+        coverage_status: 'invalid_duration',
+        coverage_note: `${months} month(s) isn't valid for "${product.product_name || product.name}" — valid options: ${product.duration_options.join(', ')}`
+      };
+    }
+
+    // Build the buy payload from the product's OWN declared required_fields
+    // rather than a fixed guess. Fall back to a reasonable default set if
+    // the product doesn't declare any (e.g. direct-mode products, which
+    // don't expose this field the way this proxy sandbox does).
+    const requiredFields = Array.isArray(product.required_fields) && product.required_fields.length
+      ? product.required_fields
+      : ['customer_email', 'customer_phone', 'customer_first_name', 'customer_last_name', 'customer_dob', 'customer_nin'];
+
+    const missing = [];
+    const body = { product_id, payment_plan: months, amount: Math.round(basePremium * months), bought_for_self: true };
+    for (const field of requiredFields) {
+      const value = resolveRequiredField(field, talent);
+      if (value === undefined || value === null || value === '') missing.push(field);
+      else body[field] = value;
+    }
+    if (missing.length) {
+      return { coverage_status: 'gap_missing_kyc', coverage_note: `Talent missing required field(s) for this product: ${missing.join(', ')}. Use PATCH /admin/talents/:id to add them.` };
+    }
+
+    const result = await mycover.buy(body);
 
     const policyData = result?.data || result;
     const active = isPolicyActive(policyData);
@@ -381,7 +413,7 @@ async function purchaseCoverage({ talent, contract }) {
       coverage_reference: result?.felicity_reference || null, // proxy mode only
       coverage_product_id: product_id,
       coverage_months: months,
-      coverage_amount_paid: amount,
+      coverage_amount_paid: body.amount,
       coverage_note: null,
     };
   } catch (err) {
