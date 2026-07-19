@@ -6,6 +6,7 @@ import PDFDocument from 'pdfkit';
 const app = express();
 app.use(cors());
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } })); // rawBody needed for webhook signature verification below
+app.use(express.urlencoded({ extended: true })); // needed for the talent-facing KYC form below (real HTML forms POST this way, not JSON)
 
 /* ---------------------------------------------------------------------- *
  * AUTH — Stripe/Paystack-style bearer key. Two key TYPES now exist:
@@ -351,6 +352,53 @@ function resolveRequiredField(fieldName, talent) {
   return map[fieldName];
 }
 
+// Reverse of the above — which talent record property does a given
+// required_field name actually write to? Only fields a talent can
+// meaningfully self-submit are listed (name/email already exist by the
+// time a contract exists, so they're deliberately not editable here).
+const REQUIRED_FIELD_TO_TALENT_PROP = {
+  customer_phone: 'phone',
+  date_of_birth: 'dob',
+  customer_dob: 'dob',
+  customer_nin: 'nin',
+  image_url: 'image_url',
+};
+
+const FIELD_LABELS = {
+  customer_phone: 'Phone number',
+  date_of_birth: 'Date of birth',
+  customer_dob: 'Date of birth',
+  customer_nin: 'NIN (National Identification Number)',
+  image_url: 'Selfie photo URL',
+};
+
+/**
+ * What does THIS contract's plan actually require from the talent, and
+ * which of those fields are still missing? Returns [] if MyCover isn't
+ * configured or no product is mapped — no point asking for KYC data that
+ * won't be used yet.
+ */
+async function getMissingCoverageFields(talent, contract) {
+  if (!MYCOVER_CONFIGURED) return [];
+  const product_id = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
+  if (!product_id) return [];
+
+  let requiredFields;
+  try {
+    const productDetail = await mycover.getProduct(product_id);
+    const product = productDetail?.data || productDetail;
+    requiredFields = Array.isArray(product?.required_fields) && product.required_fields.length
+      ? product.required_fields
+      : ['customer_phone', 'date_of_birth'];
+  } catch {
+    requiredFields = ['customer_phone', 'date_of_birth']; // can't reach MyCover right now — ask for the common baseline rather than block entirely
+  }
+
+  return requiredFields
+    .filter(f => REQUIRED_FIELD_TO_TALENT_PROP[f]) // only fields we can actually collect via a form (skip name/email — already set)
+    .filter(f => !resolveRequiredField(f, talent));
+}
+
 async function purchaseCoverage({ talent, contract }) {
   if (!MYCOVER_CONFIGURED) {
     return { coverage_status: 'gap_not_wired', coverage_note: `MyCover not configured (MYCOVER_MODE=${MYCOVER_MODE}, no key set)` };
@@ -693,9 +741,19 @@ app.get('/admin/overview', requireAdminKey, (req, res) => {
  * talent-facing "accept" links below, which are public (a talent has no
  * API key — they're clicking a link from an email).
  * ---------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- *
+ * ROUTES — everything under /v1 requires the API key EXCEPT the talent-
+ * facing "accept" links below, which are public (a talent has no API
+ * key — they're clicking a link from an email, or submitting a form from
+ * one). GET on both engagement/contract accept links; POST only on the
+ * contract one, since that's the one that may collect a KYC form.
+ * ---------------------------------------------------------------------- */
 app.use('/v1', (req, res, next) => {
   if (req.method === 'GET' && /^\/(engagements|contracts)\/[^/]+\/accept$/.test(req.path)) {
-    return next(); // public — skip the API key check for these two routes only
+    return next();
+  }
+  if (req.method === 'POST' && /^\/contracts\/[^/]+\/accept$/.test(req.path)) {
+    return next();
   }
   return requireApiKey(req, res, next);
 });
@@ -884,32 +942,91 @@ app.post('/v1/engagements/:id/contract', async (req, res) => {
 
 // GET /v1/contracts/:id/accept — TALENT-facing, public, no API key. THIS is
 // the only place a talent's status is allowed to flip to "engaged".
+function renderKycForm(contract, missingFields, token) {
+  const rows = missingFields.map(f => {
+    const label = FIELD_LABELS[f] || f;
+    const type = f === 'date_of_birth' || f === 'customer_dob' ? 'date' : 'text';
+    return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
+      <input name="${f}" type="${type}" required style="padding:8px;width:320px;max-width:90vw;font-size:14px;">`;
+  }).join('');
+
+  return `
+    <div style="font-family:serif;max-width:520px;margin:40px auto;padding:0 20px;">
+      <h2>Almost there, ${contract.talent_name}</h2>
+      <p style="font-family:sans-serif;">Before your health coverage can be activated, we need a couple more details — this stays with your coverage provider, not with the employer.</p>
+      <form method="POST" action="/v1/contracts/${contract.contract_id}/accept">
+        <input type="hidden" name="token" value="${token}">
+        ${rows}
+        <button type="submit" style="margin-top:20px;padding:10px 22px;font-size:14px;">Submit and activate coverage</button>
+      </form>
+    </div>`;
+}
+
+async function finalizeContractAcceptance(contract) {
+  contract.status = 'active';
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (talent) talent.status = 'engaged';
+  const engagement = contract.engagement_id ? db.engagements.get(contract.engagement_id) : null;
+  if (engagement) engagement.status = 'contract_accepted';
+
+  if (talent) {
+    const coverage = await purchaseCoverage({ talent, contract });
+    Object.assign(contract, coverage);
+  }
+  await saveState();
+}
+
+function acceptedConfirmationHtml(contract) {
+  const coverageLine = contract.coverage_status === 'active'
+    ? `Your health coverage is active — policy ${contract.coverage_policy_id || ''}.`
+    : contract.coverage_status === 'not_yet_purchased' ? ''
+    : `Coverage status: ${contract.coverage_status}.`;
+  return `<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. Your first payroll run will follow this contract's terms. ${coverageLine}</p>`;
+}
+
+// GET — talent clicks the link from their contract email. If MyCover needs
+// info we don't have yet, show a form instead of finalizing immediately.
 app.get('/v1/contracts/:id/accept', async (req, res) => {
   const contract = db.contracts.get(req.params.id);
   if (!contract || contract.accept_token !== req.query.token) {
     return res.status(404).send('<h2>Invalid or expired link.</h2>');
   }
-  if (contract.status === 'pending_talent_signature') {
-    contract.status = 'active';
-    const talent = db.talents.find(t => t.talent_id === contract.talent_id);
-    if (talent) talent.status = 'engaged';
-    const engagement = contract.engagement_id ? db.engagements.get(contract.engagement_id) : null;
-    if (engagement) engagement.status = 'contract_accepted';
+  if (contract.status !== 'pending_talent_signature') {
+    return res.send(acceptedConfirmationHtml(contract)); // already accepted — idempotent, don't re-purchase
+  }
 
-    // Real coverage purchase happens NOW — this is the point the talent has
-    // actually committed, which is the right moment to spend money on them.
-    if (talent) {
-      const coverage = await purchaseCoverage({ talent, contract });
-      Object.assign(contract, coverage);
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  const missing = talent ? await getMissingCoverageFields(talent, contract) : [];
+  if (missing.length) {
+    return res.send(renderKycForm(contract, missing, req.query.token));
+  }
+
+  await finalizeContractAcceptance(contract);
+  res.send(acceptedConfirmationHtml(contract));
+});
+
+// POST — talent submitted the KYC form above. Save what they gave us, then
+// finalize exactly as GET would have if nothing had been missing.
+app.post('/v1/contracts/:id/accept', async (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract || contract.accept_token !== req.body.token) {
+    return res.status(404).send('<h2>Invalid or expired link.</h2>');
+  }
+  if (contract.status !== 'pending_talent_signature') {
+    return res.send(acceptedConfirmationHtml(contract));
+  }
+
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (talent) {
+    for (const [field, value] of Object.entries(req.body)) {
+      const prop = REQUIRED_FIELD_TO_TALENT_PROP[field];
+      if (prop && value) talent[prop] = value;
     }
-
     await saveState();
   }
-  const coverageLine = contract.coverage_status === 'active'
-    ? `Your health coverage is active — policy ${contract.coverage_policy_id || ''}.`
-    : contract.coverage_status === 'not_yet_purchased' ? ''
-    : `Coverage status: ${contract.coverage_status}.`;
-  res.send(`<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. Your first payroll run will follow this contract's terms. ${coverageLine}</p>`);
+
+  await finalizeContractAcceptance(contract);
+  res.send(acceptedConfirmationHtml(contract));
 });
 
 // GET /v1/engagements — list, scoped to requesting client
