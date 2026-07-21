@@ -378,8 +378,8 @@ const FIELD_LABELS = {
   image_url: 'Selfie photo URL',
   bvn: 'BVN (Bank Verification Number)',
   rubies_account_number: 'Your Nigerian bank account number (for salary payout)',
-  rubies_account_name: 'Account name (must match your bank records)',
-  rubies_bank_code: 'Your bank\'s code (e.g. 090175)',
+  rubies_account_name: 'Your full name, exactly as it appears on your bank account (NOT your bank\'s name)',
+  rubies_bank_code: 'Your bank\'s CBN code — e.g. GTBank = 058, Rubies MFB = 090175 (ask your bank if unsure)',
 };
 
 /**
@@ -509,7 +509,16 @@ async function fincraCall(path, init = {}) {
   });
   const text = await res.text();
   const json = text ? JSON.parse(text) : null;
-  if (!res.ok) { const err = new Error(json?.error || `fincra_${res.status}: ${text}`); err.status = res.status; throw err; }
+  if (!res.ok) {
+    // Felicity's error responses include a `detail` field with the REAL
+    // rejection reason (e.g. invalid bank code, name mismatch) — this was
+    // previously being discarded, leaving only the generic error code
+    // behind and making failures impossible to diagnose without guessing.
+    const reason = json?.detail ? `${json.error}: ${JSON.stringify(json.detail)}` : (json?.error || `fincra_${res.status}: ${text}`);
+    const err = new Error(reason);
+    err.status = res.status;
+    throw err;
+  }
   return json;
 }
 
@@ -912,6 +921,22 @@ app.post('/admin/mycover/retry/:contractId', requireAdminKey, async (req, res) =
   res.json(contract);
 });
 
+// POST /admin/fincra/retry/:contractId — retry a failed/skipped salary VA
+// issuance. Use this after fixing a talent's bank details (e.g. a bad
+// account name or bank code) rather than needing them to re-do the whole
+// acceptance form.
+app.post('/admin/fincra/retry/:contractId', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status !== 'active') return res.status(409).json({ error: 'contract_not_active', message: 'Talent must have accepted the contract first.' });
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (!talent) return res.status(404).json({ error: 'talent_not_found' });
+  const salary = await issueSalaryAccount({ talent, contract });
+  Object.assign(contract, salary);
+  await saveState();
+  res.json(contract);
+});
+
 // GET /admin/overview — see EVERYTHING across EVERY client at once. This is
 // your answer to "where do I see what's going on in Tobi vs. the console" —
 // without this, you'd have to manually swap keys in the regular console to
@@ -1143,11 +1168,20 @@ app.post('/v1/engagements/:id/contract', async (req, res) => {
 // GET /v1/contracts/:id/accept — TALENT-facing, public, no API key. THIS is
 // the only place a talent's status is allowed to flip to "engaged".
 function renderKycForm(contract, missingFields, token) {
+  const PLACEHOLDERS = {
+    rubies_account_name: 'e.g. Felix Okoye',
+    rubies_account_number: 'e.g. 0123456789',
+    rubies_bank_code: 'e.g. 058',
+    bvn: 'e.g. 22222222222',
+    customer_phone: 'e.g. 08012345678',
+    phone: 'e.g. 08012345678',
+  };
   const rows = missingFields.map(f => {
     const label = FIELD_LABELS[f] || f;
     const type = f === 'date_of_birth' || f === 'customer_dob' ? 'date' : 'text';
+    const placeholder = PLACEHOLDERS[f] || '';
     return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
-      <input name="${f}" type="${type}" required style="padding:8px;width:320px;max-width:90vw;font-size:14px;">`;
+      <input name="${f}" type="${type}" ${placeholder ? `placeholder="${placeholder}"` : ''} required style="padding:8px;width:320px;max-width:90vw;font-size:14px;">`;
   }).join('');
 
   return `
@@ -1186,7 +1220,13 @@ function acceptedConfirmationHtml(contract) {
     ? `Your health coverage is active — policy ${contract.coverage_policy_id || ''}.`
     : contract.coverage_status === 'not_yet_purchased' ? ''
     : `Coverage status: ${contract.coverage_status}.`;
-  return `<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. Your first payroll run will follow this contract's terms. ${coverageLine}</p>`;
+
+  const salaryLine = contract.salary_status === 'va_issued'
+    ? `Salary account ready — wire instructions: ${contract.salary_va_account_number || ''} (${contract.salary_va_bank_name || ''}, routing ${contract.salary_va_routing_number || ''}).`
+    : contract.salary_status === 'not_yet_purchased' || !contract.salary_status ? ''
+    : `<span style="color:#b91c1c;">Salary account status: ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}. This needs attention before payroll can run for real.</span>`;
+
+  return `<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. ${coverageLine}</p><p>${salaryLine}</p>`;
 }
 
 // GET — talent clicks the link from their contract email. If MyCover needs
@@ -1296,9 +1336,7 @@ app.post('/v1/payroll/disburse', async (req, res) => {
   }
 
   const grossEmployerCurrency = Number(amount);
-  const platformFee = +(grossEmployerCurrency * 0.05).toFixed(2);       // FetchTalos take-rate
-  const careWalletCut = +(platformFee * 0.4).toFixed(2);                // slice of the fee funding the care wallet
-  const fetchTalosRevenue = +(platformFee - careWalletCut).toFixed(2);
+  const platformFee = +(grossEmployerCurrency * 0.05).toFixed(2);       // FetchTalos take-rate — now the full amount goes to revenue; real coverage cost is handled separately via MyCover purchase + Fincra split, not this internal wallet concept
   const employerTotalCharged = +(grossEmployerCurrency + platformFee).toFixed(2); // fee sits on top, employer pays it
   const netTalentNgn = +(grossEmployerCurrency * fx.rate).toFixed(2);   // talent receives full gross, converted
 
@@ -1314,8 +1352,7 @@ app.post('/v1/payroll/disburse', async (req, res) => {
     fx_source: fx.source,
     net_amount_ngn: netTalentNgn,
     platform_fee: platformFee,
-    care_wallet_funded: careWalletCut,
-    fetchtalos_revenue: fetchTalosRevenue,
+    fetchtalos_revenue: platformFee,
     employer_total_charged: employerTotalCharged,
     rail_status: 'settled', // would be 'rubies_transfer_sent' -> webhook -> 'settled' in production
     status: 'settled',
@@ -1341,9 +1378,8 @@ app.get('/v1/ledger', (req, res) => {
   const totals = payouts.reduce((acc, p) => {
     acc.total_volume_by_currency[p.employer_currency] = (acc.total_volume_by_currency[p.employer_currency] || 0) + p.gross_amount_employer_currency;
     acc.total_revenue += p.fetchtalos_revenue;
-    acc.total_care_wallet += p.care_wallet_funded;
     return acc;
-  }, { total_volume_by_currency: {}, total_revenue: 0, total_care_wallet: 0 });
+  }, { total_volume_by_currency: {}, total_revenue: 0 });
 
   res.json({ ...totals, payout_count: payouts.length, payouts: payouts.reverse() });
 });
