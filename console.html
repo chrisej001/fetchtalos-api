@@ -162,16 +162,16 @@
     </section>
 
     <section class="panel" id="panel-contracts">
-      <div class="panel-head"><h2>Contracts</h2><p class="sub">GET /v1/contracts</p></div>
+      <div class="panel-head"><h2>Contracts</h2><p class="sub">GET /v1/contracts &mdash; wire instructions column shows the REAL salary account, once issued</p></div>
       <button class="row-btn" id="refreshContractsBtn" style="margin-bottom:14px;">Refresh</button>
       <div class="tbl-wrap">
-        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th></th></tr></thead>
+        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th>Salary account (wire here)</th></tr></thead>
         <tbody id="contractsTableBody"><tr><td colspan="5" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
 
     <section class="panel" id="panel-payroll">
-      <div class="panel-head"><h2>Run payroll</h2><p class="sub">POST /v1/payroll/disburse &mdash; only ACTIVE (talent-accepted) contracts show here</p></div>
+      <div class="panel-head"><h2>Run payroll (legacy simulation)</h2><p class="sub">POST /v1/payroll/disburse &mdash; a fake instant settlement, kept for quick testing. This does NOT touch the real Fincra rail &mdash; that happens automatically via wire transfer to the account shown in the Contracts tab. Only ACTIVE (talent-accepted) contracts show here.</p></div>
       <div class="field"><label>Active contract</label><select id="payrollContractSelect"><option value="">connect to load</option></select></div>
       <div class="field"><label>Gross amount (in employer's currency)</label><input class="search-input" type="number" id="payrollAmount" placeholder="e.g. 2400"></div>
       <button class="btn-primary" id="runPayrollBtn">Disburse</button>
@@ -184,7 +184,7 @@
       <div class="stat-strip">
         <div class="stat-cell"><div class="l">PAYOUTS RUN</div><div class="v" id="statCount">-</div></div>
         <div class="stat-cell"><div class="l">FETCHTALOS REVENUE</div><div class="v amber" id="statRevenue">-</div></div>
-        <div class="stat-cell"><div class="l">CARE WALLET FUNDED</div><div class="v teal" id="statWallet">-</div></div>
+        <div class="stat-cell"><div class="l">SALARY ACCOUNTS ISSUED</div><div class="v teal" id="statWallet">-</div></div>
         <div class="stat-cell"><div class="l">VOLUME BY CURRENCY</div><div class="v" id="statVolume" style="font-size:12px;">-</div></div>
       </div>
       <div class="tbl-wrap">
@@ -390,13 +390,20 @@ function renderContracts(){
     var tbody = document.getElementById('contractsTableBody');
     var rows = data.results.slice().reverse();
     tbody.innerHTML = rows.length ? rows.map(function(c){
-      var actionCell = c.status === 'pending_talent_signature'
-        ? '<button class="btn-teal" onclick="simulateContractAccept(\''+c.contract_id+'\',\''+c.accept_token+'\')">Simulate: talent accepts contract</button>'
-        : '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      var lastCell;
+      if(c.status === 'pending_talent_signature'){
+        lastCell = '<button class="btn-teal" onclick="simulateContractAccept(\''+c.contract_id+'\',\''+c.accept_token+'\')">Simulate: talent accepts contract</button>';
+      } else if(c.salary_status === 'va_issued'){
+        lastCell = '<span class="mono" style="font-size:11px;">'+c.salary_va_account_number+'<br>'+c.salary_va_bank_name+' &middot; routing '+c.salary_va_routing_number+'</span>';
+      } else if(c.salary_status && c.salary_status !== 'not_yet_purchased'){
+        lastCell = '<span style="color:var(--red);font-size:11px;">'+c.salary_status+(c.salary_note ? ': '+c.salary_note : '')+'</span>';
+      } else {
+        lastCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      }
       return '<tr><td class="mono">'+c.contract_id+'</td><td>'+c.talent_name+'</td>'
         + '<td class="mono">'+(c.proposed_amount ? c.proposed_amount + ' ' + c.employer_currency : '-')+'</td>'
         + '<td><span class="status-pill status-'+c.status+'">'+c.status+'</span></td>'
-        + '<td>'+actionCell+'</td></tr>';
+        + '<td>'+lastCell+'</td></tr>';
     }).join('') : '<tr><td colspan="5" class="empty-state">// no contracts yet - send one from Engagements</td></tr>';
   }).catch(function(err){ showToast('Failed to load contracts: ' + err.message, true); });
 }
@@ -437,7 +444,6 @@ document.getElementById('runPayrollBtn').onclick = function(){
       + '<div class="receipt-row"><span class="k">gross ('+p.employer_currency+')</span><span class="v">'+p.gross_amount_employer_currency+'</span></div>'
       + '<div class="receipt-row"><span class="k">net_to_talent_ngn</span><span class="v">' + Number(p.net_amount_ngn).toLocaleString() + '</span></div>'
       + '<div class="receipt-row"><span class="k">platform_fee</span><span class="v">'+p.platform_fee+'</span></div>'
-      + '<div class="receipt-row"><span class="k">care_wallet_funded</span><span class="v">'+p.care_wallet_funded+'</span></div>'
       + '<div class="receipt-row total"><span class="k">employer_total_charged</span><span class="v">'+p.employer_total_charged+'</span></div>'
       + '</div>';
     showToast('Payroll settled');
@@ -452,7 +458,6 @@ function renderLedger(){
   api('/v1/ledger').then(function(data){
     document.getElementById('statCount').textContent = data.payout_count;
     document.getElementById('statRevenue').textContent = '$' + data.total_revenue.toFixed(2);
-    document.getElementById('statWallet').textContent = '$' + data.total_care_wallet.toFixed(2);
     var volParts = [];
     for(var cur in data.total_volume_by_currency){ volParts.push(cur + ' ' + data.total_volume_by_currency[cur].toFixed(0)); }
     document.getElementById('statVolume').textContent = volParts.join(' | ') || '-';
@@ -465,6 +470,10 @@ function renderLedger(){
         + '<td><span class="status-pill status-settled">'+p.status+'</span></td></tr>';
     }).join('') : '<tr><td colspan="6" class="empty-state">// no payouts yet</td></tr>';
   }).catch(function(err){ showToast('Failed to load ledger: ' + err.message, true); });
+  api('/v1/contracts').then(function(data){
+    var issued = data.results.filter(function(c){ return c.salary_status === 'va_issued'; }).length;
+    document.getElementById('statWallet').textContent = issued;
+  }).catch(function(){});
 }
 document.getElementById('refreshLedgerBtn').onclick = renderLedger;
 
