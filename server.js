@@ -358,18 +358,28 @@ function resolveRequiredField(fieldName, talent) {
 // time a contract exists, so they're deliberately not editable here).
 const REQUIRED_FIELD_TO_TALENT_PROP = {
   customer_phone: 'phone',
+  phone: 'phone',
   date_of_birth: 'dob',
   customer_dob: 'dob',
   customer_nin: 'nin',
   image_url: 'image_url',
+  bvn: 'bvn',
+  rubies_account_number: 'rubies_account_number',
+  rubies_account_name: 'rubies_account_name',
+  rubies_bank_code: 'rubies_bank_code',
 };
 
 const FIELD_LABELS = {
   customer_phone: 'Phone number',
+  phone: 'Phone number',
   date_of_birth: 'Date of birth',
   customer_dob: 'Date of birth',
   customer_nin: 'NIN (National Identification Number)',
   image_url: 'Selfie photo URL',
+  bvn: 'BVN (Bank Verification Number)',
+  rubies_account_number: 'Your Nigerian bank account number (for salary payout)',
+  rubies_account_name: 'Account name (must match your bank records)',
+  rubies_bank_code: 'Your bank\'s code (e.g. 090175)',
 };
 
 /**
@@ -467,6 +477,148 @@ async function purchaseCoverage({ talent, contract }) {
   } catch (err) {
     console.warn('[mycover] purchase failed:', err.message);
     return { coverage_status: 'purchase_failed', coverage_note: err.message };
+  }
+}
+
+/* ---------------------------------------------------------------------- *
+ * FELICITY FINCRA PROXY — issues each talent a real USD virtual account.
+ * The enterprise wires salary there in USD; Felicity auto-converts to NGN
+ * and pays out to the talent's Rubies NUBAN — automatically, no code of
+ * ours pushes that transfer.
+ *
+ * Critically, the `split` block on VA issuance is what makes this able to
+ * cover MORE than just salary from one inflow: it can also skim a platform
+ * fee leg and an insurance-premium reimbursement leg (paying back what
+ * Felicity fronted via the MyCover proxy) before the remainder reaches the
+ * talent. Without this, a single enterprise wire could only ever pay the
+ * talent — nothing else. This is why insurance and salary can now settle
+ * from ONE transaction instead of needing two separate payment rails.
+ *
+ * Mode is derived from the key's own prefix (test_ / live_), matching the
+ * doc's own recommended pattern — no separate mode env var needed.
+ * ---------------------------------------------------------------------- */
+const FINCRA_BASE = 'https://jtotljjdyhxjbbsnpuml.supabase.co/functions/v1';
+const FELICITY_FINCRA_KEY = process.env.FELICITY_FINCRA_KEY;
+const FINCRA_CONFIGURED = Boolean(FELICITY_FINCRA_KEY);
+const FINCRA_MODE = FELICITY_FINCRA_KEY?.startsWith('live_') ? 'live' : 'test';
+
+async function fincraCall(path, init = {}) {
+  const res = await fetch(`${FINCRA_BASE}${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${FELICITY_FINCRA_KEY}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
+  });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : null;
+  if (!res.ok) { const err = new Error(json?.error || `fincra_${res.status}: ${text}`); err.status = res.status; throw err; }
+  return json;
+}
+
+const fincra = {
+  issueUsdVa: (payload) => fincraCall('/fincra-proxy-usd-va', { method: 'POST', body: JSON.stringify(payload) }),
+  setPayoutPlan: (payload) => fincraCall('/fincra-proxy-payout-plan', { method: 'POST', body: JSON.stringify(payload) }),
+  getVa: (talentRef) => fincraCall(`/fincra-proxy-va-get?talent_ref=${encodeURIComponent(talentRef)}`),
+  payoutStatus: (talentRef, limit = 20) => fincraCall(`/fincra-proxy-payout-status?talent_ref=${encodeURIComponent(talentRef)}&limit=${limit}`),
+  simulate: (talentRef, amount) => fincraCall('/fincra-proxy-simulate', { method: 'POST', body: JSON.stringify({ talent_ref: talentRef, amount }) }),
+};
+
+// Platform's own settlement accounts — where the fee and insurance-
+// reimbursement legs actually land. Both optional; a leg is simply omitted
+// from the split if its account isn't configured, rather than failing.
+const PLATFORM_FEE_BPS = Number(process.env.PLATFORM_FEE_BPS) || 500; // 500 bps = 5%, matches the existing platform fee elsewhere
+const PLATFORM_ACCOUNT = process.env.FETCHTALOS_PLATFORM_ACCOUNT_NUMBER ? {
+  account_number: process.env.FETCHTALOS_PLATFORM_ACCOUNT_NUMBER,
+  account_name: process.env.FETCHTALOS_PLATFORM_ACCOUNT_NAME || 'FetchTalos Ltd',
+  bank_code: process.env.FETCHTALOS_PLATFORM_BANK_CODE,
+} : null;
+const INSURANCE_POOL_ACCOUNT = process.env.FETCHTALOS_INSURANCE_POOL_ACCOUNT_NUMBER ? {
+  account_number: process.env.FETCHTALOS_INSURANCE_POOL_ACCOUNT_NUMBER,
+  account_name: process.env.FETCHTALOS_INSURANCE_POOL_ACCOUNT_NAME || 'FetchTalos Insurance Pool',
+  bank_code: process.env.FETCHTALOS_INSURANCE_POOL_BANK_CODE,
+} : null;
+
+// Same fixed set every time — this endpoint (unlike MyCover's products)
+// doesn't self-describe its required fields, so this list is hardcoded
+// from the doc rather than discovered dynamically.
+const FINCRA_REQUIRED_TALENT_FIELDS = ['first_name', 'last_name', 'email', 'phone', 'bvn', 'rubies_account_number', 'rubies_account_name', 'rubies_bank_code'];
+
+function fincraMissingFields(talent) {
+  const [firstName, ...rest] = (talent.name || '').split(' ');
+  const values = {
+    first_name: firstName,
+    last_name: rest.join(' ') || firstName,
+    email: talent.email,
+    phone: talent.phone,
+    bvn: talent.bvn,
+    rubies_account_number: talent.rubies_account_number,
+    rubies_account_name: talent.rubies_account_name,
+    rubies_bank_code: talent.rubies_bank_code,
+  };
+  return FINCRA_REQUIRED_TALENT_FIELDS.filter(f => !values[f]);
+}
+
+// Form-worthy subset — excludes first_name/last_name/email, which come
+// from the talent record itself and were never meant to be independently
+// asked for on this form. Returns [] outright if Fincra isn't configured —
+// no point asking for salary-account KYC that won't be used yet.
+function fincraMissingFormFields(talent) {
+  if (!FINCRA_CONFIGURED) return [];
+  return fincraMissingFields(talent).filter(f => REQUIRED_FIELD_TO_TALENT_PROP[f]);
+}
+
+/**
+ * Issues (or reuses — idempotent per talent_ref) a real USD virtual account
+ * for this talent, with a split that reimburses the insurance premium
+ * Felicity already fronted (if coverage was purchased) and skims the
+ * platform fee, before the remainder is set up to reach the talent.
+ * Gracefully no-ops if Fincra isn't configured or KYC is incomplete —
+ * never throws back to the caller.
+ */
+async function issueSalaryAccount({ talent, contract }) {
+  if (!FINCRA_CONFIGURED) {
+    return { salary_status: 'gap_not_wired', salary_note: 'FELICITY_FINCRA_KEY not set' };
+  }
+  const missing = fincraMissingFields(talent);
+  if (missing.length) {
+    return { salary_status: 'gap_missing_kyc', salary_note: `Talent missing field(s) for salary account: ${missing.join(', ')}. Use PATCH /admin/talents/:id to add them.` };
+  }
+
+  const [firstName, ...rest] = talent.name.split(' ');
+  const lastName = rest.join(' ') || firstName;
+
+  const split = { extra_legs: [] };
+  if (contract.coverage_status === 'active' && contract.coverage_amount_paid && INSURANCE_POOL_ACCOUNT) {
+    split.extra_legs.push({
+      label: 'insurance_premium',
+      amount_ngn: contract.coverage_amount_paid, // MyCover/Bastion products are NGN-denominated already — no conversion needed here
+      beneficiary: INSURANCE_POOL_ACCOUNT,
+    });
+  }
+  if (PLATFORM_ACCOUNT) {
+    split.platform_fee_bps = PLATFORM_FEE_BPS;
+    split.platform_beneficiary = PLATFORM_ACCOUNT;
+  }
+  const hasSplit = split.extra_legs.length > 0 || split.platform_fee_bps;
+
+  try {
+    const result = await fincra.issueUsdVa({
+      talent_ref: contract.contract_id,
+      beneficiary: { first_name: firstName, last_name: lastName, email: talent.email, phone: talent.phone, bvn: talent.bvn },
+      rubies_credit: { account_number: talent.rubies_account_number, account_name: talent.rubies_account_name, bank_code: talent.rubies_bank_code },
+      ...(hasSplit ? { split } : {}),
+    });
+
+    return {
+      salary_status: 'va_issued',
+      salary_va_account_number: result?.account?.account_number || null,
+      salary_va_routing_number: result?.account?.routing_number || null,
+      salary_va_bank_name: result?.account?.bank_name || null,
+      salary_talent_ref: contract.contract_id,
+      salary_split_applied: hasSplit,
+      salary_note: null,
+    };
+  } catch (err) {
+    console.warn('[fincra] VA issuance failed:', err.message);
+    return { salary_status: 'issuance_failed', salary_note: err.message };
   }
 }
 
@@ -669,6 +821,54 @@ app.get('/admin/mycover/status', requireAdminKey, (req, res) => {
       ? (Object.values(COVERAGE_PRODUCT_IDS).every(v => !v) ? 'Key is set but no product_id mapped yet — call GET /admin/mycover/products to find real ones, then set MYCOVER_PRODUCT_ID_* env vars.' : 'Ready.')
       : `Not configured — set ${MYCOVER_MODE === 'direct' ? 'MYCOVER_SECRET_KEY' : 'FELICITY_PARTNER_KEY'} (and MYCOVER_MODE if you want the other mode).`
   });
+});
+
+// GET /admin/fincra/status — is the salary-payment rail configured
+app.get('/admin/fincra/status', requireAdminKey, (req, res) => {
+  res.json({
+    mode: FINCRA_MODE,
+    configured: FINCRA_CONFIGURED,
+    platform_fee_bps: PLATFORM_FEE_BPS,
+    platform_account_configured: Boolean(PLATFORM_ACCOUNT),
+    insurance_pool_account_configured: Boolean(INSURANCE_POOL_ACCOUNT),
+    note: !FINCRA_CONFIGURED
+      ? 'Not configured — set FELICITY_FINCRA_KEY (test_... or live_...).'
+      : !PLATFORM_ACCOUNT && !INSURANCE_POOL_ACCOUNT
+        ? 'VA issuance will work, but with no split — the full amount goes to the talent. Set FETCHTALOS_PLATFORM_ACCOUNT_* and FETCHTALOS_INSURANCE_POOL_ACCOUNT_* to enable fee/insurance skimming.'
+        : 'Ready.'
+  });
+});
+
+// GET /admin/fincra/payout-status/:contractId — real ledger for this
+// contract's salary VA, straight from Felicity.
+app.get('/admin/fincra/payout-status/:contractId', requireAdminKey, async (req, res) => {
+  if (!FINCRA_CONFIGURED) return res.status(422).json({ error: 'fincra_not_configured' });
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  try {
+    const data = await fincra.payoutStatus(contract.contract_id);
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: 'fincra_request_failed', message: err.message });
+  }
+});
+
+// POST /admin/fincra/simulate/:contractId — the key demo tool. Fires a fake
+// USD deposit through the ENTIRE real pipeline (test mode only, per
+// Felicity's own guard) — VA credit → FX → split fan-out → NGN payouts —
+// in seconds, live, in front of whoever you're demoing to.
+app.post('/admin/fincra/simulate/:contractId', requireAdminKey, async (req, res) => {
+  if (!FINCRA_CONFIGURED) return res.status(422).json({ error: 'fincra_not_configured' });
+  if (FINCRA_MODE !== 'test') return res.status(403).json({ error: 'simulate_only_in_test_mode' });
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  const amount = Number(req.body?.amount) || 500;
+  try {
+    const data = await fincra.simulate(contract.contract_id, amount);
+    res.json({ simulated_usd_amount: amount, result: data });
+  } catch (err) {
+    res.status(502).json({ error: 'fincra_request_failed', message: err.message });
+  }
 });
 
 // GET /admin/mycover/products — real catalog, use this to find product_ids
@@ -972,6 +1172,11 @@ async function finalizeContractAcceptance(contract) {
   if (talent) {
     const coverage = await purchaseCoverage({ talent, contract });
     Object.assign(contract, coverage);
+
+    // Issue AFTER coverage so the split can correctly reimburse whatever
+    // was actually just purchased (or correctly omit that leg if it wasn't).
+    const salary = await issueSalaryAccount({ talent, contract });
+    Object.assign(contract, salary);
   }
   await saveState();
 }
@@ -996,7 +1201,19 @@ app.get('/v1/contracts/:id/accept', async (req, res) => {
   }
 
   const talent = db.talents.find(t => t.talent_id === contract.talent_id);
-  const missing = talent ? await getMissingCoverageFields(talent, contract) : [];
+  const missingCoverage = talent ? await getMissingCoverageFields(talent, contract) : [];
+  const missingSalary = talent ? fincraMissingFormFields(talent) : [];
+  // Dedup by underlying talent PROPERTY, not raw field name — MyCover and
+  // Fincra sometimes use different names for the same thing (customer_phone
+  // vs phone), and showing two inputs for the same actual field is confusing.
+  const seenProps = new Set();
+  const missing = [];
+  for (const field of [...missingCoverage, ...missingSalary]) {
+    const prop = REQUIRED_FIELD_TO_TALENT_PROP[field] || field;
+    if (seenProps.has(prop)) continue;
+    seenProps.add(prop);
+    missing.push(field);
+  }
   if (missing.length) {
     return res.send(renderKycForm(contract, missing, req.query.token));
   }
@@ -1133,47 +1350,108 @@ app.get('/v1/ledger', (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true, service: 'fetchtalos-api', time: new Date().toISOString(), persistence: PERSISTENCE_ENABLED ? 'enabled' : 'in-memory-only' }));
 
-/* ---------------------------------------------------------------------- *
- * POST /webhooks/mycover — PUBLIC (MyCover/Felicity call this, they don't
- * have a FetchTalos API key). Register this URL wherever MyCover.ai's
- * dashboard or Felicity's partner settings ask for a webhook_url:
- *   https://fetchtalos.onrender.com/webhooks/mycover
- * Set MYCOVER_WEBHOOK_SECRET to whatever secret you register alongside it.
- *
- * Matches an incoming event to a contract by (in order): felicity_reference
- * (proxy mode), then policy_id — same priority as the integration doc.
- * Without MYCOVER_WEBHOOK_SECRET set, requests are rejected outright rather
- * than trusted unverified.
- * ---------------------------------------------------------------------- */
-app.post('/webhooks/mycover', async (req, res) => {
-  const secret = process.env.MYCOVER_WEBHOOK_SECRET;
-  if (!secret) return res.status(503).json({ error: 'webhook_not_configured', message: 'Set MYCOVER_WEBHOOK_SECRET to enable this endpoint.' });
+/**
+ * Generic Felicity webhook signature verifier — same scheme used by both
+ * the MyCover proxy and the Fincra proxy (HMAC-SHA256, X-Felicity-Signature).
+ * Uses timing-safe comparison per Felicity's own reference implementation.
+ */
+function verifyFelicitySignature(rawBody, signature, secret) {
+  if (!signature) return false;
+  try {
+    const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  } catch {
+    return false; // length mismatch etc — timingSafeEqual throws rather than returning false
+  }
+}
 
-  const valid = verifyMycoverWebhook(req.rawBody, req.headers, secret);
-  if (!valid) return res.status(401).json({ error: 'invalid_signature' });
-
-  const { event, felicity_reference, data } = req.body || {};
+function handleMycoverWebhookEvent(event, body) {
+  const { felicity_reference, data } = body;
   const policyId = data?.essential?.policy_id || data?.policy?.id || null;
 
   const contract = [...db.contracts.values()].find(c =>
     (felicity_reference && c.coverage_reference === felicity_reference) ||
     (policyId && c.coverage_policy_id === policyId)
   );
+  if (!contract) return { matched: false };
 
-  if (!contract) {
-    console.warn(`[mycover webhook] event "${event}" didn't match any contract (felicity_reference=${felicity_reference}, policy_id=${policyId})`);
-    return res.status(200).json({ received: true, matched: false }); // 200 so MyCover/Felicity doesn't retry forever on an event we'll never match
+  if (/purchase\.successful|policy\.activated/.test(event)) contract.coverage_status = 'active';
+  else if (/purchase\.failed|policy\.failed/.test(event)) contract.coverage_status = 'purchase_failed';
+  else if (/policy\.cancelled/.test(event)) contract.coverage_status = 'cancelled';
+  else if (/policy\.expired/.test(event)) contract.coverage_status = 'expired';
+
+  return { matched: true, contract, new_status: contract.coverage_status };
+}
+
+function handleFincraWebhookEvent(event, body) {
+  const talentRef = body.talent_ref || body.data?.talent_ref;
+  const contract = talentRef ? db.contracts.get(talentRef) : null;
+  if (!contract) return { matched: false };
+
+  contract.salary_events = contract.salary_events || [];
+  contract.salary_events.push({ event, at: new Date().toISOString(), data: body });
+
+  if (event === 'usd_va.credited') contract.salary_status = 'deposit_received';
+  else if (event === 'fx.completed') contract.salary_status = 'fx_converted';
+  else if (event === 'ngn.split_completed') contract.salary_status = 'payout_processing';
+  else if (event === 'ngn.payout_settled') {
+    contract.salary_status = 'payout_settled';
+    contract.salary_last_settled_leg = body.leg_label || 'talent';
+  } else if (event === 'ngn.payout_failed') {
+    contract.salary_status = 'payout_failed';
+    contract.salary_note = body.reason || 'unknown reason';
+  } else if (event === 'ngn.split_failed') {
+    contract.salary_status = 'split_failed';
+    contract.salary_note = body.reason || 'split_exceeds_ngn';
   }
 
-  if (/purchase\.successful|policy\.activated/.test(event || '')) contract.coverage_status = 'active';
-  else if (/purchase\.failed|policy\.failed/.test(event || '')) contract.coverage_status = 'purchase_failed';
-  else if (/policy\.cancelled/.test(event || '')) contract.coverage_status = 'cancelled';
-  else if (/policy\.expired/.test(event || '')) contract.coverage_status = 'expired';
+  return { matched: true, contract, new_status: contract.salary_status };
+}
+
+/* ---------------------------------------------------------------------- *
+ * POST /webhooks/felicity — PUBLIC, and the ONLY webhook URL you register
+ * with Felicity. Their partner dashboard has exactly one webhook_url field
+ * per partner key — MyCover events and Fincra events both arrive here,
+ * distinguished by event name, not by separate URLs (an earlier version of
+ * this code assumed two URLs; that was wrong — fixed to match how
+ * Felicity's partner model actually works).
+ *
+ * Register: https://fetchtalos.onrender.com/webhooks/felicity
+ * Set FELICITY_WEBHOOK_SECRET to the SAME secret pasted into Felicity
+ * Admin's "Webhook secret" field on the fetchtalos partner card — per
+ * Felicity's own setup guide, it's one shared secret for both event
+ * families on that row, not two.
+ *
+ * /webhooks/mycover and /webhooks/felicity-fincra still work too (aliases
+ * to this same handler) in case either was already registered somewhere —
+ * harmless to keep, since only one URL will ever actually be hit in
+ * practice given Felicity's one-URL-per-partner model.
+ * ---------------------------------------------------------------------- */
+app.post(['/webhooks/felicity', '/webhooks/mycover', '/webhooks/felicity-fincra'], async (req, res) => {
+  const secret = process.env.FELICITY_WEBHOOK_SECRET || process.env.FINCRA_WEBHOOK_SECRET || process.env.MYCOVER_WEBHOOK_SECRET;
+  if (!secret) return res.status(503).json({ error: 'webhook_not_configured', message: 'Set FELICITY_WEBHOOK_SECRET to enable this endpoint.' });
+
+  const valid = verifyFelicitySignature(req.rawBody, req.headers['x-felicity-signature'], secret);
+  if (!valid) return res.status(401).json({ error: 'invalid_signature' });
+
+  const event = req.headers['x-felicity-event'] || req.body?.event || '';
+  const body = req.body || {};
+
+  // Dispatch by event name — Fincra events all start with usd_va./fx./ngn.,
+  // MyCover events start with purchase./policy./commission.
+  const isFincraEvent = /^(usd_va|fx|ngn)\./.test(event);
+  const result = isFincraEvent ? handleFincraWebhookEvent(event, body) : handleMycoverWebhookEvent(event, body);
+
+  if (!result.matched) {
+    console.warn(`[felicity webhook] event "${event}" didn't match any contract`);
+    return res.status(200).json({ received: true, matched: false }); // 200 so Felicity doesn't retry forever on an event we'll never match
+  }
 
   await saveState();
-  res.status(200).json({ received: true, matched: true, contract_id: contract.contract_id, new_status: contract.coverage_status });
+  res.status(200).json({ received: true, matched: true, contract_id: result.contract.contract_id, new_status: result.new_status });
 });
 
 const PORT = process.env.PORT || 3000;
 await loadState(); // restore prior state (if persistence is configured) BEFORE accepting traffic
 app.listen(PORT, () => console.log(`FetchTalos API listening on :${PORT}`));
+
