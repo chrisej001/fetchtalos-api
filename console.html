@@ -62,9 +62,10 @@
   tr:last-child td{border-bottom:none;}
   .stack-tag{display:inline-block; background:var(--bg-raised); border:1px solid var(--border); color:var(--text-muted); font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 6px; border-radius:5px; margin:1px 2px 1px 0;}
   .status-pill{font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 8px; border-radius:100px; display:inline-block; white-space:nowrap;}
-  .status-available, .status-active, .status-interview_accepted, .status-contract_accepted, .status-settled{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
-  .status-engaged, .status-interviewing, .status-interview_invited, .status-contract_sent{background:rgba(242,166,90,.1); color:var(--amber); border:1px solid rgba(242,166,90,.3);}
+  .status-available, .status-active, .status-interview_accepted, .status-contract_accepted, .status-settled, .status-paid{background:rgba(94,234,212,.1); color:var(--teal); border:1px solid rgba(94,234,212,.3);}
+  .status-engaged, .status-interviewing, .status-interview_invited, .status-contract_sent, .status-due{background:rgba(242,166,90,.1); color:var(--amber); border:1px solid rgba(242,166,90,.3);}
   .status-pending_talent_signature{background:rgba(196,162,240,.1); color:var(--purple); border:1px solid rgba(196,162,240,.3);}
+  .status-overdue{background:rgba(232,99,90,.12); color:var(--red); border:1px solid rgba(232,99,90,.4); font-weight:600;}
   .empty-state{padding:34px 20px; text-align:center; color:var(--text-faint); font-size:12.5px; font-family:'IBM Plex Mono',monospace;}
 
   .search-row{display:flex; gap:9px; margin-bottom:14px; flex-wrap:wrap;}
@@ -135,6 +136,7 @@
     <button class="tabbtn active" data-panel="talent">Talent Pool</button>
     <button class="tabbtn" data-panel="engagements">Engagements</button>
     <button class="tabbtn" data-panel="contracts">Contracts</button>
+    <button class="tabbtn" data-panel="payperiods">Pay Periods</button>
     <button class="tabbtn" data-panel="payroll">Payroll</button>
     <button class="tabbtn" data-panel="ledger">Ledger</button>
   </div>
@@ -167,6 +169,21 @@
       <div class="tbl-wrap">
         <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th>Salary account (wire here)</th></tr></thead>
         <tbody id="contractsTableBody"><tr><td colspan="5" class="empty-state">// connect to load</td></tr></tbody></table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-payperiods">
+      <div class="panel-head"><h2>Pay periods</h2><p class="sub">recurring salary schedule &mdash; status computed live, closed automatically when a real Fincra payout confirms</p></div>
+      <div class="stat-strip" style="margin-bottom:16px;">
+        <div class="stat-cell"><div class="l">DUE</div><div class="v amber" id="statDue">-</div></div>
+        <div class="stat-cell"><div class="l">OVERDUE</div><div class="v" id="statOverdue" style="color:var(--red);">-</div></div>
+        <div class="stat-cell"><div class="l">PAID</div><div class="v teal" id="statPaid">-</div></div>
+        <div class="stat-cell"><div class="l">TOTAL PERIODS</div><div class="v" id="statTotalPeriods">-</div></div>
+      </div>
+      <button class="row-btn" id="refreshPayPeriodsBtn" style="margin-bottom:14px;">Refresh</button>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Contract</th><th>Talent</th><th>#</th><th>Amount</th><th>Due date</th><th>Status</th></tr></thead>
+        <tbody id="payPeriodsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
 
@@ -290,6 +307,7 @@ for(var i=0;i<tabbtns.length;i++){
     if(this.dataset.panel==='payroll') refreshPayrollSelect();
     if(this.dataset.panel==='engagements') renderEngagements();
     if(this.dataset.panel==='contracts') renderContracts();
+    if(this.dataset.panel==='payperiods') renderPayPeriods();
   });
 }
 
@@ -408,6 +426,52 @@ function renderContracts(){
   }).catch(function(err){ showToast('Failed to load contracts: ' + err.message, true); });
 }
 document.getElementById('refreshContractsBtn').onclick = renderContracts;
+
+/* PAY PERIODS */
+function renderPayPeriods(){
+  if(!connected) return;
+  var tbody = document.getElementById('payPeriodsTableBody');
+  api('/v1/contracts').then(function(data){
+    var contracts = data.results.filter(function(c){ return c.status === 'active'; });
+    if(!contracts.length){
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">// no active contracts yet</td></tr>';
+      document.getElementById('statDue').textContent = '0';
+      document.getElementById('statOverdue').textContent = '0';
+      document.getElementById('statPaid').textContent = '0';
+      document.getElementById('statTotalPeriods').textContent = '0';
+      return;
+    }
+    var contractById = {};
+    contracts.forEach(function(c){ contractById[c.contract_id] = c; });
+
+    Promise.all(contracts.map(function(c){
+      return api('/v1/contracts/'+c.contract_id+'/pay-periods').then(function(r){ return r.results; }).catch(function(){ return []; });
+    })).then(function(lists){
+      var all = [].concat.apply([], lists);
+      all.sort(function(a,b){ return new Date(a.due_date) - new Date(b.due_date); });
+
+      var due = all.filter(function(p){ return p.status==='due'; }).length;
+      var overdue = all.filter(function(p){ return p.status==='overdue'; }).length;
+      var paid = all.filter(function(p){ return p.status==='paid'; }).length;
+      document.getElementById('statDue').textContent = due;
+      document.getElementById('statOverdue').textContent = overdue;
+      document.getElementById('statPaid').textContent = paid;
+      document.getElementById('statTotalPeriods').textContent = all.length;
+
+      tbody.innerHTML = all.length ? all.map(function(p){
+        var c = contractById[p.contract_id];
+        var dueDate = new Date(p.due_date).toLocaleDateString();
+        return '<tr><td class="mono" style="font-size:11px;">'+p.contract_id+'</td>'
+          + '<td>'+(c ? c.talent_name : '-')+'</td>'
+          + '<td class="mono">'+p.period_number+'</td>'
+          + '<td class="mono">'+(p.amount_due ? p.amount_due+' '+p.employer_currency : '-')+'</td>'
+          + '<td class="mono">'+dueDate+'</td>'
+          + '<td><span class="status-pill status-'+p.status+'">'+p.status+'</span></td></tr>';
+      }).join('') : '<tr><td colspan="6" class="empty-state">// no pay periods yet</td></tr>';
+    });
+  }).catch(function(err){ showToast('Failed to load pay periods: ' + err.message, true); });
+}
+document.getElementById('refreshPayPeriodsBtn').onclick = renderPayPeriods;
 
 function simulateContractAccept(contractId, token){
   publicGet(BASE_URL + '/v1/contracts/' + contractId + '/accept?token=' + token).then(function(){
