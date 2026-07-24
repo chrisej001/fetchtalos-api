@@ -1310,6 +1310,33 @@ async function finalizeContractAcceptance(contract) {
   // wired yet (a failed VA can be retried later; the period doesn't wait).
   createNextPayPeriod(contract, new Date());
 
+  // Real welcome email — the HMO policy and salary account details were
+  // previously only ever shown on the confirmation WEBPAGE, meaning a
+  // talent who closed that tab lost them permanently. This is the same
+  // information, sent somewhere they can actually keep it.
+  if (talent?.email) {
+    const coverageLine = contract.coverage_status === 'active'
+      ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id || ''}</li>`
+      : contract.coverage_status && contract.coverage_status !== 'not_yet_purchased'
+        ? `<li><b>Health coverage:</b> ${contract.coverage_status}${contract.coverage_note ? ' — ' + contract.coverage_note : ''}</li>`
+        : '';
+    const salaryLine = contract.salary_status === 'va_issued'
+      ? `<li><b>Salary account:</b> ${contract.salary_va_account_number} — ${contract.salary_va_bank_name}, routing ${contract.salary_va_routing_number}</li>`
+      : contract.salary_status && contract.salary_status !== 'not_yet_purchased'
+        ? `<li><b>Salary account:</b> ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}</li>`
+        : '';
+
+    await sendEmail({
+      to: talent.email,
+      subject: `Welcome aboard, ${contract.talent_name} — your account details`,
+      html: `<p>Hi ${contract.talent_name},</p>
+        <p>Your contract with ${contract.employer_name} is now active. Here's what's set up for you:</p>
+        <ul>${coverageLine}${salaryLine}</ul>
+        <p>Keep this email — it's your record of both.</p>
+        <p>— FetchTalos</p>`
+    });
+  }
+
   await saveState();
 }
 
@@ -1471,6 +1498,44 @@ app.post('/v1/payroll/disburse', async (req, res) => {
   };
 
   db.payouts.set(payout_id, payout);
+
+  // This is the demo payoff moment: even though the money movement itself
+  // is simulated (no real Fincra deposit happened), the PAY PERIOD state
+  // updates for real — same function the real webhook uses — so the Pay
+  // Periods tab genuinely flips to paid and shows the real next due date,
+  // not a fake number. Talent's own record is what closes the loop.
+  const settledPeriod = settleOldestUnpaidPeriod(contract_id);
+  const nextPeriod = settledPeriod ? [...db.payPeriods.values()]
+    .filter(p => p.contract_id === contract_id && !p.paid_at)
+    .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0] : null;
+
+  if (settledPeriod) {
+    payout.pay_period_settled = settledPeriod.period_id;
+    payout.pay_period_number = settledPeriod.period_number;
+  }
+  if (nextPeriod) {
+    payout.next_pay_period_due_date = nextPeriod.due_date;
+  }
+
+  // Real email to the talent confirming they were paid — this is the part
+  // that makes the simulation feel like the actual product, not a database
+  // update nobody sees.
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (talent?.email) {
+    await sendEmail({
+      to: talent.email,
+      subject: `You've been paid — ₦${netTalentNgn.toLocaleString()} received`,
+      html: `<p>Hi ${contract.talent_name},</p>
+        <p>Your payment for this pay period has landed.</p>
+        <ul>
+          <li><b>Amount:</b> ₦${netTalentNgn.toLocaleString()} (converted from ${grossEmployerCurrency} ${employerCurrency} at ${fx.rate})</li>
+          ${settledPeriod ? `<li><b>Pay period:</b> #${settledPeriod.period_number}</li>` : ''}
+          ${nextPeriod ? `<li><b>Next payment due:</b> ${new Date(nextPeriod.due_date).toLocaleDateString()}</li>` : ''}
+        </ul>
+        <p>— FetchTalos</p>`
+    });
+  }
+
   await saveState();
   res.status(202).json(payout);
 });
