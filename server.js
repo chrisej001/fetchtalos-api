@@ -77,6 +77,7 @@ const db = {
   engagements: new Map(), // the interview-invite stage — created BEFORE any contract exists
   contracts: new Map(),
   payouts: new Map(),
+  payPeriods: new Map(), // recurring salary pay periods per contract — see PAY PERIODS section below
 };
 
 const taxFormMap = { US: 'W-8BEN', UK: 'Self-Assessment (Overseas)', DE: 'Freistellungsauftrag Ref.', CA: 'W-8BEN + T4A-NR' };
@@ -84,15 +85,15 @@ const taxFormMap = { US: 'W-8BEN', UK: 'Self-Assessment (Overseas)', DE: 'Freist
 const coveragePlanCopy = {
   remote_contractor_basic: {
     label: 'Remote Contractor — Basic',
-    benefits: ['Health coverage via MyCover.ai (individual, basic tier)', 'FetchTalos Care Wallet funded on every payroll run']
+    benefits: ['Health coverage via MyCover.ai (individual, basic tier)']
   },
   remote_contractor_plus: {
     label: 'Remote Contractor — Plus',
-    benefits: ['Health coverage via MyCover.ai (individual, enhanced tier)', 'FetchTalos Care Wallet funded on every payroll run', 'Priority claims processing']
+    benefits: ['Health coverage via MyCover.ai (individual, enhanced tier)', 'Priority claims processing']
   },
   remote_contractor_family: {
     label: 'Remote Contractor — Family',
-    benefits: ['Health coverage via MyCover.ai (family tier — spouse + dependents)', 'FetchTalos Care Wallet funded on every payroll run', 'Priority claims processing']
+    benefits: ['Health coverage via MyCover.ai (family tier — spouse + dependents)', 'Priority claims processing']
   }
 };
 
@@ -631,6 +632,72 @@ async function issueSalaryAccount({ talent, contract }) {
   }
 }
 
+/* ---------------------------------------------------------------------- *
+ * PAY PERIODS — the missing piece that made payment feel like a one-time
+ * setup instead of real recurring payroll. A VA gets issued ONCE at
+ * contract acceptance, but salary is owed every month — nothing before
+ * this tracked "has this month actually been paid," so the enterprise had
+ * no reminder and there was no history broken out by period.
+ *
+ * Status is computed LIVE at read time (paid_at set → paid; due_date
+ * passed → overdue; else → due), not stored — no cron/scheduler needed to
+ * keep it accurate, matching the graceful-degradation style used
+ * everywhere else in this file.
+ * ---------------------------------------------------------------------- */
+const PAY_PERIOD_DAYS = Number(process.env.PAY_PERIOD_DAYS) || 30; // how often salary is owed
+
+function payPeriodStatus(period) {
+  if (period.paid_at) return 'paid';
+  return new Date(period.due_date) < new Date() ? 'overdue' : 'due';
+}
+
+/**
+ * Creates the NEXT unpaid pay period for a contract — called once when a
+ * contract first goes active, and again every time a period is marked paid
+ * (so there's always exactly one open period per contract, never zero and
+ * never a backlog of duplicates).
+ */
+function createNextPayPeriod(contract, afterDate) {
+  const periodNumber = [...db.payPeriods.values()].filter(p => p.contract_id === contract.contract_id).length + 1;
+  const dueDate = new Date(afterDate || Date.now());
+  dueDate.setDate(dueDate.getDate() + PAY_PERIOD_DAYS);
+
+  const period = {
+    period_id: id('pp'),
+    contract_id: contract.contract_id,
+    client_id: contract.client_id,
+    period_number: periodNumber,
+    amount_due: contract.proposed_amount || null,
+    employer_currency: contract.employer_currency,
+    due_date: dueDate.toISOString(),
+    paid_at: null,
+    matched_payout_id: null,
+    created_at: new Date().toISOString(),
+  };
+  db.payPeriods.set(period.period_id, period);
+  return period;
+}
+
+/**
+ * Marks the OLDEST unpaid period for a contract as paid — called when
+ * Felicity confirms a real NGN payout settled. FIFO matching: real salary
+ * wires are expected to land roughly in order, one per period, so the
+ * oldest still-open period is the correct one to close. Then opens the
+ * next period so there's always exactly one active going forward.
+ */
+function settleOldestUnpaidPeriod(contractId) {
+  const open = [...db.payPeriods.values()]
+    .filter(p => p.contract_id === contractId && !p.paid_at)
+    .sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+  const period = open[0];
+  if (!period) return null;
+
+  period.paid_at = new Date().toISOString();
+  const contract = db.contracts.get(contractId);
+  if (contract) createNextPayPeriod(contract, period.paid_at);
+  return period;
+}
+
 /**
  * Verifies a MyCover/Felicity webhook signature — exact logic from the
  * integration doc, both modes.
@@ -675,7 +742,8 @@ async function saveState() {
       talents: db.talents,
       engagements: [...db.engagements.entries()],
       contracts: [...db.contracts.entries()],
-      payouts: [...db.payouts.entries()]
+      payouts: [...db.payouts.entries()],
+      payPeriods: [...db.payPeriods.entries()]
     });
     await fetch(`${REDIS_URL}/set/fetchtalos_state`, {
       method: 'POST',
@@ -719,7 +787,8 @@ async function loadState() {
       if (snapshot.engagements) db.engagements = new Map(snapshot.engagements);
       if (snapshot.contracts) db.contracts = new Map(snapshot.contracts);
       if (snapshot.payouts) db.payouts = new Map(snapshot.payouts);
-      console.log(`[persistence] restored ${db.talents.length} talents, ${db.contracts.size} contracts, ${db.payouts.size} payouts, ${Object.keys(KEYS).length} keys`);
+      if (snapshot.payPeriods) db.payPeriods = new Map(snapshot.payPeriods);
+      console.log(`[persistence] restored ${db.talents.length} talents, ${db.contracts.size} contracts, ${db.payouts.size} payouts, ${db.payPeriods.size} pay periods, ${Object.keys(KEYS).length} keys`);
     } else {
       console.log('[persistence] connected, no prior saved state — starting fresh');
     }
@@ -959,6 +1028,28 @@ app.get('/admin/overview', requireAdminKey, (req, res) => {
       (byClient[p.client_id].volume_by_currency[p.employer_currency] || 0) + p.gross_amount_employer_currency;
   }
   res.json({ clients: byClient, total_clients: Object.keys(byClient).length });
+});
+
+// GET /admin/pay-periods — every open/overdue pay period across EVERY
+// client, in one view. This is the real answer to "is anyone late on
+// payroll" — worth showing directly in a hub demo, since it's the kind of
+// operational visibility a manual spreadsheet-based process doesn't have.
+// Filter with ?status=overdue to see only what needs attention.
+app.get('/admin/pay-periods', requireAdminKey, (req, res) => {
+  let periods = [...db.payPeriods.values()].map(p => ({ ...p, status: payPeriodStatus(p) }));
+  if (req.query.status) periods = periods.filter(p => p.status === req.query.status);
+  periods.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+
+  const withContext = periods.map(p => {
+    const contract = db.contracts.get(p.contract_id);
+    return { ...p, talent_name: contract?.talent_name || null, employer_name: contract?.employer_name || null };
+  });
+
+  res.json({
+    count: withContext.length,
+    overdue_count: withContext.filter(p => p.status === 'overdue').length,
+    results: withContext
+  });
 });
 
 /* ---------------------------------------------------------------------- *
@@ -1212,6 +1303,13 @@ async function finalizeContractAcceptance(contract) {
     const salary = await issueSalaryAccount({ talent, contract });
     Object.assign(contract, salary);
   }
+
+  // First pay period starts NOW, regardless of whether VA issuance
+  // succeeded — this tracks what's OWED, which begins the moment the
+  // talent accepts, independent of whether the payment rail is fully
+  // wired yet (a failed VA can be retried later; the period doesn't wait).
+  createNextPayPeriod(contract, new Date());
+
   await saveState();
 }
 
@@ -1303,6 +1401,18 @@ app.get('/v1/contracts/:id', (req, res) => {
 app.get('/v1/contracts', (req, res) => {
   const mine = [...db.contracts.values()].filter(c => c.client_id === req.clientId);
   res.json({ count: mine.length, results: mine });
+});
+
+// GET /v1/contracts/:id/pay-periods — recurring salary schedule for this
+// contract, with LIVE status (paid/due/overdue) computed on every read.
+app.get('/v1/contracts/:id/pay-periods', (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
+  const periods = [...db.payPeriods.values()]
+    .filter(p => p.contract_id === req.params.id)
+    .sort((a, b) => a.period_number - b.period_number)
+    .map(p => ({ ...p, status: payPeriodStatus(p) }));
+  res.json({ count: periods.length, results: periods });
 });
 
 // POST /v1/payroll/disburse
@@ -1433,6 +1543,14 @@ function handleFincraWebhookEvent(event, body) {
   else if (event === 'ngn.payout_settled') {
     contract.salary_status = 'payout_settled';
     contract.salary_last_settled_leg = body.leg_label || 'talent';
+    // A split fires MULTIPLE payout_settled events — one per beneficiary
+    // (talent, platform fee, insurance reimbursement). Only the TALENT's
+    // own leg should close a pay period; settling on the platform fee leg
+    // would incorrectly mark salary as paid when only the fee landed.
+    if (!body.leg_label || body.leg_label === 'talent') {
+      const settled = settleOldestUnpaidPeriod(contract.contract_id);
+      if (settled) settled.matched_payout_id = body.fincra_payout_reference || null;
+    }
   } else if (event === 'ngn.payout_failed') {
     contract.salary_status = 'payout_failed';
     contract.salary_note = body.reason || 'unknown reason';
