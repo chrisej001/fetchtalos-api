@@ -990,6 +990,23 @@ app.post('/admin/mycover/retry/:contractId', requireAdminKey, async (req, res) =
   res.json(contract);
 });
 
+// POST /admin/contracts/:id/resend-welcome-email — the welcome email (HMO
+// policy + salary account details) only ever fires ONCE, at the exact
+// moment a contract first goes active — by design, so re-visiting the
+// accept link doesn't trigger a second insurance purchase. Use this to
+// manually resend it for a contract that's already active, e.g. if the
+// talent lost the original or you're re-testing an already-accepted
+// contract from before this feature existed.
+app.post('/admin/contracts/:id/resend-welcome-email', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status !== 'active') return res.status(409).json({ error: 'contract_not_active', message: 'Talent must have accepted the contract first.' });
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (!talent?.email) return res.status(422).json({ error: 'talent_missing_email' });
+  await sendWelcomeEmail(contract, talent);
+  res.json({ sent: true, to: talent.email });
+});
+
 // POST /admin/fincra/retry/:contractId — retry a failed/skipped salary VA
 // issuance. Use this after fixing a talent's bank details (e.g. a bad
 // account name or bank code) rather than needing them to re-do the whole
@@ -1310,34 +1327,41 @@ async function finalizeContractAcceptance(contract) {
   // wired yet (a failed VA can be retried later; the period doesn't wait).
   createNextPayPeriod(contract, new Date());
 
-  // Real welcome email — the HMO policy and salary account details were
-  // previously only ever shown on the confirmation WEBPAGE, meaning a
-  // talent who closed that tab lost them permanently. This is the same
-  // information, sent somewhere they can actually keep it.
-  if (talent?.email) {
-    const coverageLine = contract.coverage_status === 'active'
-      ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id || ''}</li>`
-      : contract.coverage_status && contract.coverage_status !== 'not_yet_purchased'
-        ? `<li><b>Health coverage:</b> ${contract.coverage_status}${contract.coverage_note ? ' — ' + contract.coverage_note : ''}</li>`
-        : '';
-    const salaryLine = contract.salary_status === 'va_issued'
-      ? `<li><b>Salary account:</b> ${contract.salary_va_account_number} — ${contract.salary_va_bank_name}, routing ${contract.salary_va_routing_number}</li>`
-      : contract.salary_status && contract.salary_status !== 'not_yet_purchased'
-        ? `<li><b>Salary account:</b> ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}</li>`
-        : '';
-
-    await sendEmail({
-      to: talent.email,
-      subject: `Welcome aboard, ${contract.talent_name} — your account details`,
-      html: `<p>Hi ${contract.talent_name},</p>
-        <p>Your contract with ${contract.employer_name} is now active. Here's what's set up for you:</p>
-        <ul>${coverageLine}${salaryLine}</ul>
-        <p>Keep this email — it's your record of both.</p>
-        <p>— FetchTalos</p>`
-    });
-  }
-
+  await sendWelcomeEmail(contract, talent);
   await saveState();
+}
+
+/**
+ * The HMO policy and salary account details, sent somewhere the talent can
+ * actually keep them (previously only ever shown on the confirmation
+ * WEBPAGE — lost forever if they closed the tab). Extracted as its own
+ * function so it can be manually resent via admin without needing to
+ * re-run the entire acceptance flow (which would incorrectly re-purchase
+ * insurance / re-issue a salary account).
+ */
+async function sendWelcomeEmail(contract, talent) {
+  if (!talent?.email) return { sent: false, reason: 'talent_missing_email' };
+
+  const coverageLine = contract.coverage_status === 'active'
+    ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id || ''}</li>`
+    : contract.coverage_status && contract.coverage_status !== 'not_yet_purchased'
+      ? `<li><b>Health coverage:</b> ${contract.coverage_status}${contract.coverage_note ? ' — ' + contract.coverage_note : ''}</li>`
+      : '';
+  const salaryLine = contract.salary_status === 'va_issued'
+    ? `<li><b>Salary account:</b> ${contract.salary_va_account_number} — ${contract.salary_va_bank_name}, routing ${contract.salary_va_routing_number}</li>`
+    : contract.salary_status && contract.salary_status !== 'not_yet_purchased'
+      ? `<li><b>Salary account:</b> ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}</li>`
+      : '';
+
+  return sendEmail({
+    to: talent.email,
+    subject: `Welcome aboard, ${contract.talent_name} — your account details`,
+    html: `<p>Hi ${contract.talent_name},</p>
+      <p>Your contract with ${contract.employer_name} is now active. Here's what's set up for you:</p>
+      <ul>${coverageLine}${salaryLine}</ul>
+      <p>Keep this email — it's your record of both.</p>
+      <p>— FetchTalos</p>`
+  });
 }
 
 function acceptedConfirmationHtml(contract) {
@@ -1445,23 +1469,23 @@ app.get('/v1/contracts/:id/pay-periods', (req, res) => {
 // POST /v1/payroll/disburse
 // This is the core of what you asked for: employer pays in THEIR currency,
 // talent receives NGN. Conversion happens here, against a live rate.
-app.post('/v1/payroll/disburse', async (req, res) => {
-  const { contract_id, amount, idempotency_key } = req.body || {};
-
-  if (!contract_id || !amount || amount <= 0) {
-    return res.status(400).json({ error: 'contract_id and a positive amount are required' });
-  }
-
-  const contract = db.contracts.get(contract_id);
-  if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
+/**
+ * Processes payroll for ONE contract. The amount is always derived from
+ * the contract itself (contract.proposed_amount) — never trusted from the
+ * caller — so what the talent was actually promised is what they actually
+ * get, every time. Insurance is only reimbursed on the contract's first
+ * ever settled period, since that premium was a one-time cost at contract
+ * acceptance, not a recurring monthly charge.
+ */
+async function disburseOneContract(contract, req_clientId, idempotencyKey) {
+  if (contract.client_id !== req_clientId) return { contract_id: contract.contract_id, error: 'contract_not_found' };
   if (contract.status !== 'active') {
-    return res.status(409).json({ error: 'contract_not_active', message: `Contract is "${contract.status}" — the talent must accept the contract before payroll can run.` });
+    return { contract_id: contract.contract_id, error: 'contract_not_active', message: `Contract is "${contract.status}" — the talent must accept the contract before payroll can run.` };
   }
 
-  // idempotency: if this key was already processed BY THIS CLIENT, return the original result
-  if (idempotency_key) {
-    const existing = [...db.payouts.values()].find(p => p.idempotency_key === idempotency_key && p.client_id === req.clientId);
-    if (existing) return res.status(200).json({ ...existing, replayed: true });
+  if (idempotencyKey) {
+    const existing = [...db.payouts.values()].find(p => p.idempotency_key === idempotencyKey && p.client_id === req_clientId);
+    if (existing) return { ...existing, replayed: true };
   }
 
   const employerCurrency = contract.employer_currency || 'USD';
@@ -1469,19 +1493,31 @@ app.post('/v1/payroll/disburse', async (req, res) => {
   try {
     fx = await getNgnRate(employerCurrency);
   } catch (err) {
-    return res.status(502).json({ error: 'fx_lookup_failed', detail: err.message });
+    return { contract_id: contract.contract_id, error: 'fx_lookup_failed', detail: err.message };
   }
 
-  const grossEmployerCurrency = Number(amount);
-  const platformFee = +(grossEmployerCurrency * 0.05).toFixed(2);       // FetchTalos take-rate — now the full amount goes to revenue; real coverage cost is handled separately via MyCover purchase + Fincra split, not this internal wallet concept
-  const employerTotalCharged = +(grossEmployerCurrency + platformFee).toFixed(2); // fee sits on top, employer pays it
-  const netTalentNgn = +(grossEmployerCurrency * fx.rate).toFixed(2);   // talent receives full gross, converted
+  const grossEmployerCurrency = Number(contract.proposed_amount) || 0;
+  if (!grossEmployerCurrency) {
+    return { contract_id: contract.contract_id, error: 'no_agreed_amount', message: 'This contract has no proposed_amount on file — cannot run payroll against it.' };
+  }
+  const platformFee = +(grossEmployerCurrency * 0.05).toFixed(2);
+
+  // Insurance reimbursement ONLY on the very first settled period for this
+  // contract — a one-time premium cost at acceptance, not recurring.
+  const alreadyPaidCount = [...db.payPeriods.values()].filter(p => p.contract_id === contract.contract_id && p.paid_at).length;
+  const isFirstPayment = alreadyPaidCount === 0;
+  const insuranceReimbursement = (isFirstPayment && contract.coverage_amount_paid)
+    ? +(contract.coverage_amount_paid / fx.rate).toFixed(2) // stored in NGN from the MyCover purchase — converted back to employer currency for this invoice line
+    : 0;
+
+  const employerTotalCharged = +(grossEmployerCurrency + platformFee + insuranceReimbursement).toFixed(2);
+  const netTalentNgn = +(grossEmployerCurrency * fx.rate).toFixed(2); // talent always receives the FULL agreed amount — fees and insurance are marked up, never deducted
 
   const payout_id = id('pay');
   const payout = {
     payout_id,
-    client_id: req.clientId,
-    contract_id,
+    client_id: req_clientId,
+    contract_id: contract.contract_id,
     talent_name: contract.talent_name,
     employer_currency: employerCurrency,
     gross_amount_employer_currency: grossEmployerCurrency,
@@ -1489,24 +1525,23 @@ app.post('/v1/payroll/disburse', async (req, res) => {
     fx_source: fx.source,
     net_amount_ngn: netTalentNgn,
     platform_fee: platformFee,
+    insurance_reimbursement: insuranceReimbursement,
     fetchtalos_revenue: platformFee,
     employer_total_charged: employerTotalCharged,
     rail_status: 'settled', // would be 'rubies_transfer_sent' -> webhook -> 'settled' in production
     status: 'settled',
-    idempotency_key: idempotency_key || null,
+    idempotency_key: idempotencyKey || null,
     created_at: new Date().toISOString(),
   };
 
   db.payouts.set(payout_id, payout);
 
-  // This is the demo payoff moment: even though the money movement itself
-  // is simulated (no real Fincra deposit happened), the PAY PERIOD state
-  // updates for real — same function the real webhook uses — so the Pay
-  // Periods tab genuinely flips to paid and shows the real next due date,
-  // not a fake number. Talent's own record is what closes the loop.
-  const settledPeriod = settleOldestUnpaidPeriod(contract_id);
+  // The demo payoff moment: even though the money movement itself is
+  // simulated (no real Fincra deposit happened), the PAY PERIOD state
+  // updates for real — same function the real webhook uses.
+  const settledPeriod = settleOldestUnpaidPeriod(contract.contract_id);
   const nextPeriod = settledPeriod ? [...db.payPeriods.values()]
-    .filter(p => p.contract_id === contract_id && !p.paid_at)
+    .filter(p => p.contract_id === contract.contract_id && !p.paid_at)
     .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0] : null;
 
   if (settledPeriod) {
@@ -1517,9 +1552,6 @@ app.post('/v1/payroll/disburse', async (req, res) => {
     payout.next_pay_period_due_date = nextPeriod.due_date;
   }
 
-  // Real email to the talent confirming they were paid — this is the part
-  // that makes the simulation feel like the actual product, not a database
-  // update nobody sees.
   const talent = db.talents.find(t => t.talent_id === contract.talent_id);
   if (talent?.email) {
     await sendEmail({
@@ -1536,8 +1568,51 @@ app.post('/v1/payroll/disburse', async (req, res) => {
     });
   }
 
+  return payout;
+}
+
+// POST /v1/payroll/disburse — bulk. Body: { contract_ids: ["ctr_...", ...],
+// idempotency_key (optional, applied per-contract as "key:contract_id") }.
+// Amounts are ALWAYS derived from each contract's own proposed_amount —
+// never accepted from the caller — so what's actually paid always matches
+// what the talent was actually promised.
+app.post('/v1/payroll/disburse', async (req, res) => {
+  const body = req.body || {};
+  const contractIds = Array.isArray(body.contract_ids)
+    ? body.contract_ids
+    : (body.contract_id ? [body.contract_id] : []); // back-compat with the old single-contract shape
+
+  if (!contractIds.length) {
+    return res.status(400).json({ error: 'contract_ids (array) is required' });
+  }
+
+  const results = [];
+  for (const contractId of contractIds) {
+    const contract = db.contracts.get(contractId);
+    if (!contract) { results.push({ contract_id: contractId, error: 'contract_not_found' }); continue; }
+    const perContractKey = body.idempotency_key ? `${body.idempotency_key}:${contractId}` : null;
+    results.push(await disburseOneContract(contract, req.clientId, perContractKey));
+  }
+
   await saveState();
-  res.status(202).json(payout);
+
+  const succeeded = results.filter(r => !r.error);
+  const failed = results.filter(r => r.error);
+  const totals = succeeded.reduce((acc, p) => {
+    acc.total_gross += p.gross_amount_employer_currency;
+    acc.total_platform_fee += p.platform_fee;
+    acc.total_insurance_reimbursement += p.insurance_reimbursement || 0;
+    acc.total_employer_charged += p.employer_total_charged;
+    return acc;
+  }, { total_gross: 0, total_platform_fee: 0, total_insurance_reimbursement: 0, total_employer_charged: 0 });
+
+  res.status(202).json({
+    count: results.length,
+    succeeded: succeeded.length,
+    failed: failed.length,
+    totals,
+    results,
+  });
 });
 
 // GET /v1/payroll/:id

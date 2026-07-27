@@ -188,10 +188,20 @@
     </section>
 
     <section class="panel" id="panel-payroll">
-      <div class="panel-head"><h2>Run payroll (legacy simulation)</h2><p class="sub">POST /v1/payroll/disburse &mdash; a fake instant settlement, kept for quick testing. This does NOT touch the real Fincra rail &mdash; that happens automatically via wire transfer to the account shown in the Contracts tab. Only ACTIVE (talent-accepted) contracts show here.</p></div>
-      <div class="field"><label>Active contract</label><select id="payrollContractSelect"><option value="">connect to load</option></select></div>
-      <div class="field"><label>Gross amount (in employer's currency)</label><input class="search-input" type="number" id="payrollAmount" placeholder="e.g. 2400"></div>
-      <button class="btn-primary" id="runPayrollBtn">Disburse</button>
+      <div class="panel-head"><h2>Run payroll</h2><p class="sub">POST /v1/payroll/disburse &mdash; amounts are LOCKED to each contract's agreed salary, never editable here. Insurance is reimbursed only on a talent's first ever payment. Select one or more active contracts, then disburse them all at once.</p></div>
+      <div class="tbl-wrap" style="margin-bottom:16px;">
+        <table>
+          <thead><tr><th style="width:30px;"></th><th>Talent</th><th>Agreed salary</th><th>Platform fee (5%)</th><th>Insurance (1st payment only)</th><th>Total charged</th></tr></thead>
+          <tbody id="payrollSelectTableBody"><tr><td colspan="6" class="empty-state">// connect to load active contracts</td></tr></tbody></table>
+      </div>
+      <div class="stat-strip" style="margin-bottom:16px;">
+        <div class="stat-cell"><div class="l">SELECTED</div><div class="v" id="payrollSelectedCount">0</div></div>
+        <div class="stat-cell"><div class="l">TOTAL SALARY</div><div class="v" id="payrollTotalSalary">-</div></div>
+        <div class="stat-cell"><div class="l">TOTAL FEE + INSURANCE</div><div class="v amber" id="payrollTotalExtras">-</div></div>
+        <div class="stat-cell"><div class="l">GRAND TOTAL TO WIRE</div><div class="v teal" id="payrollGrandTotal">-</div></div>
+      </div>
+      <button class="btn-primary" id="runPayrollBtn" disabled>Disburse selected</button>
+      <button class="row-btn" id="refreshPayrollBtn" style="margin-left:8px;">Refresh</button>
       <div id="payrollResult"></div>
     </section>
 
@@ -286,7 +296,7 @@ document.getElementById('connectBtn').onclick = function(){
       document.getElementById('connDot').className = 'conn-dot ok';
       document.getElementById('connLabel').textContent = 'connected';
       showToast('Connected to ' + BASE_URL);
-      renderTalent(); renderEngagements(); renderContracts(); renderLedger(); refreshPayrollSelect();
+      renderTalent(); renderEngagements(); renderContracts(); renderLedger(); renderPayrollSelect();
     })
     .catch(function(err){
       connected = false;
@@ -304,7 +314,7 @@ for(var i=0;i<tabbtns.length;i++){
     for(var k=0;k<panels.length;k++) panels[k].classList.remove('active');
     this.classList.add('active');
     document.getElementById('panel-'+this.dataset.panel).classList.add('active');
-    if(this.dataset.panel==='payroll') refreshPayrollSelect();
+    if(this.dataset.panel==='payroll') renderPayrollSelect();
     if(this.dataset.panel==='engagements') renderEngagements();
     if(this.dataset.panel==='contracts') renderContracts();
     if(this.dataset.panel==='payperiods') renderPayPeriods();
@@ -476,43 +486,87 @@ document.getElementById('refreshPayPeriodsBtn').onclick = renderPayPeriods;
 function simulateContractAccept(contractId, token){
   publicGet(BASE_URL + '/v1/contracts/' + contractId + '/accept?token=' + token).then(function(){
     showToast('Contract accepted (simulated as the talent) - now active');
-    renderContracts(); renderTalent(); refreshPayrollSelect();
+    renderContracts(); renderTalent(); renderPayrollSelect();
   }).catch(function(err){ showToast('Failed: ' + err.message, true); });
 }
 
 /* PAYROLL - only ACTIVE contracts */
-function refreshPayrollSelect(){
+/* PAYROLL — multi-select bulk disburse, amounts locked to contract data */
+var payrollContractsCache = [];
+
+function renderPayrollSelect(){
   if(!connected) return;
+  var tbody = document.getElementById('payrollSelectTableBody');
   api('/v1/contracts').then(function(data){
     var active = data.results.filter(function(c){ return c.status === 'active'; });
-    var sel = document.getElementById('payrollContractSelect');
-    sel.innerHTML = active.length ? active.map(function(c){
-      return '<option value="'+c.contract_id+'">'+c.contract_id+' - '+c.talent_name+' ('+c.employer_currency+')</option>';
-    }).join('') : '<option value="">No active contracts yet</option>';
+    payrollContractsCache = active;
+    if(!active.length){
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">// no active contracts yet</td></tr>';
+      updatePayrollTotals();
+      return;
+    }
+    tbody.innerHTML = active.map(function(c){
+      var salary = Number(c.proposed_amount) || 0;
+      var fee = +(salary * 0.05).toFixed(2);
+      var insuranceNote = c.coverage_amount_paid
+        ? '<span style="font-size:11px;color:var(--teal);">reimbursed if 1st payment</span>'
+        : '<span style="font-size:11px;color:var(--text-faint);">-</span>';
+      return '<tr>'
+        + '<td><input type="checkbox" class="payroll-check" data-contract="'+c.contract_id+'" data-salary="'+salary+'" data-fee="'+fee+'" onchange="updatePayrollTotals()"></td>'
+        + '<td>'+c.talent_name+'<br><span style="color:var(--text-faint);font-family:\'IBM Plex Mono\',monospace;font-size:10px;">'+c.contract_id+'</span></td>'
+        + '<td class="mono">'+salary+' '+c.employer_currency+'</td>'
+        + '<td class="mono">'+fee+' '+c.employer_currency+'</td>'
+        + '<td>'+insuranceNote+'</td>'
+        + '<td class="mono">computed on disburse</td></tr>';
+    }).join('');
+    updatePayrollTotals();
   }).catch(function(){});
+}
+document.getElementById('refreshPayrollBtn').onclick = renderPayrollSelect;
+
+function updatePayrollTotals(){
+  var checked = Array.prototype.slice.call(document.querySelectorAll('.payroll-check:checked'));
+  document.getElementById('payrollSelectedCount').textContent = checked.length;
+  var totalSalary = 0, totalFee = 0;
+  checked.forEach(function(cb){
+    totalSalary += parseFloat(cb.dataset.salary) || 0;
+    totalFee += parseFloat(cb.dataset.fee) || 0;
+  });
+  document.getElementById('payrollTotalSalary').textContent = checked.length ? totalSalary.toFixed(2) : '-';
+  document.getElementById('payrollTotalExtras').textContent = checked.length ? ('+' + totalFee.toFixed(2) + ' fee (+ insurance if applicable)') : '-';
+  document.getElementById('payrollGrandTotal').textContent = checked.length ? (totalSalary + totalFee).toFixed(2) + '+' : '-';
+  document.getElementById('runPayrollBtn').disabled = checked.length === 0;
 }
 
 document.getElementById('runPayrollBtn').onclick = function(){
-  var contract_id = document.getElementById('payrollContractSelect').value;
-  var amount = parseFloat(document.getElementById('payrollAmount').value);
-  if(!contract_id){ showToast('No active contract selected', true); return; }
-  if(!amount || amount<=0){ showToast('Enter a valid amount', true); return; }
+  var checked = Array.prototype.slice.call(document.querySelectorAll('.payroll-check:checked'));
+  var contractIds = checked.map(function(cb){ return cb.dataset.contract; });
+  if(!contractIds.length){ showToast('Select at least one contract', true); return; }
+
   api('/v1/payroll/disburse', { method:'POST', body: JSON.stringify({
-    contract_id: contract_id, amount: amount, idempotency_key: 'console-' + contract_id + '-' + Date.now()
-  })}).then(function(p){
-    var fxTag = p.fx_source.indexOf('live') === 0 ? '<span class="fx-tag live">live rate</span>' : '<span class="fx-tag fallback">fallback rate</span>';
+    contract_ids: contractIds, idempotency_key: 'console-bulk-' + Date.now()
+  })}).then(function(resp){
+    var rows = resp.results.map(function(p){
+      if(p.error){
+        return '<div class="receipt-row"><span class="k">'+p.contract_id+'</span><span class="v" style="color:var(--red);">'+p.error+'</span></div>';
+      }
+      var fxTag = p.fx_source.indexOf('live') === 0 ? '<span class="fx-tag live">live</span>' : '<span class="fx-tag fallback">fallback</span>';
+      return '<div class="receipt" style="margin-bottom:10px;">'
+        + '<div class="receipt-row"><span class="k">'+p.talent_name+'</span><span class="v">'+p.payout_id+(p.replayed?' (replayed)':'')+'</span></div>'
+        + '<div class="receipt-row"><span class="k">salary</span><span class="v">'+p.gross_amount_employer_currency+' '+p.employer_currency+' '+fxTag+'</span></div>'
+        + '<div class="receipt-row"><span class="k">net to talent</span><span class="v">\u20a6'+Number(p.net_amount_ngn).toLocaleString()+'</span></div>'
+        + '<div class="receipt-row"><span class="k">platform fee</span><span class="v">'+p.platform_fee+'</span></div>'
+        + (p.insurance_reimbursement ? '<div class="receipt-row"><span class="k">insurance reimbursement</span><span class="v">'+p.insurance_reimbursement+'</span></div>' : '')
+        + '<div class="receipt-row total"><span class="k">total charged</span><span class="v">'+p.employer_total_charged+'</span></div>'
+        + '<div class="receipt-row"><span class="k">next due</span><span class="v">'+(p.next_pay_period_due_date ? new Date(p.next_pay_period_due_date).toLocaleDateString() : '-')+'</span></div>'
+        + '</div>';
+    }).join('');
     document.getElementById('payrollResult').innerHTML =
-      '<div class="receipt">'
-      + '<div class="receipt-row"><span class="k">payout_id</span><span class="v">'+p.payout_id+'</span></div>'
-      + '<div class="receipt-row"><span class="k">fx_rate</span><span class="v">'+p.fx_rate+' '+fxTag+'</span></div>'
-      + '<div class="receipt-row"><span class="k">gross ('+p.employer_currency+')</span><span class="v">'+p.gross_amount_employer_currency+'</span></div>'
-      + '<div class="receipt-row"><span class="k">net_to_talent_ngn</span><span class="v">' + Number(p.net_amount_ngn).toLocaleString() + '</span></div>'
-      + '<div class="receipt-row"><span class="k">platform_fee</span><span class="v">'+p.platform_fee+'</span></div>'
-      + '<div class="receipt-row total"><span class="k">employer_total_charged</span><span class="v">'+p.employer_total_charged+'</span></div>'
-      + '</div>';
-    showToast('Payroll settled');
-    document.getElementById('payrollAmount').value = '';
+      '<h3 style="font-size:14px;margin:16px 0 10px;">Grand total charged: '+resp.totals.total_employer_charged.toFixed(2)+'</h3>' + rows;
+    showToast(resp.succeeded + ' paid, ' + resp.failed + ' failed');
     renderLedger();
+    renderPayPeriods();
+    renderPayrollSelect();
   }).catch(function(err){ showToast('Disburse failed: ' + err.message, true); });
 };
 
