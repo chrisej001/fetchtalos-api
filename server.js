@@ -1449,9 +1449,48 @@ app.get('/v1/contracts/:id', (req, res) => {
 });
 
 // GET /v1/contracts  (list — scoped to the requesting client only)
-app.get('/v1/contracts', (req, res) => {
+// GET /v1/rates?currency=USD — the same live rate payroll disbursement
+// actually uses, exposed so callers (like the console) can compute an
+// honest estimate instead of guessing or hardcoding a number.
+app.get('/v1/rates', async (req, res) => {
+  const currency = (req.query.currency || 'USD').toUpperCase();
+  try {
+    const fx = await getNgnRate(currency);
+    res.json({ currency, rate: fx.rate, source: fx.source });
+  } catch (err) {
+    res.status(502).json({ error: 'fx_lookup_failed', detail: err.message });
+  }
+});
+
+app.get('/v1/contracts', async (req, res) => {
   const mine = [...db.contracts.values()].filter(c => c.client_id === req.clientId);
-  res.json({ count: mine.length, results: mine });
+
+  // Enrich each ACTIVE contract with whether its next payment would be its
+  // FIRST (the only time insurance gets reimbursed), and if so, the REAL
+  // live-converted estimate of that exact premium — not a placeholder
+  // label. The premium itself (coverage_amount_paid, in NGN) is the exact
+  // amount that was actually submitted to MyCover's real purchase call at
+  // contract acceptance; only the FX conversion shown here is "live as of
+  // right now" and can drift slightly from the rate at actual disburse time.
+  const enriched = await Promise.all(mine.map(async (c) => {
+    if (c.status !== 'active' || !c.coverage_amount_paid) return c;
+    const alreadyPaid = [...db.payPeriods.values()].filter(p => p.contract_id === c.contract_id && p.paid_at).length;
+    const isFirstPayment = alreadyPaid === 0;
+    if (!isFirstPayment) return { ...c, insurance_due_next_payment: false };
+    try {
+      const fx = await getNgnRate(c.employer_currency || 'USD');
+      return {
+        ...c,
+        insurance_due_next_payment: true,
+        insurance_estimate_employer_currency: +(c.coverage_amount_paid / fx.rate).toFixed(2),
+        insurance_estimate_fx_source: fx.source,
+      };
+    } catch {
+      return { ...c, insurance_due_next_payment: true }; // FX lookup failed — still flag it's due, just can't show a number
+    }
+  }));
+
+  res.json({ count: enriched.length, results: enriched });
 });
 
 // GET /v1/contracts/:id/pay-periods — recurring salary schedule for this

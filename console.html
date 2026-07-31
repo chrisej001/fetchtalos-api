@@ -508,16 +508,30 @@ function renderPayrollSelect(){
     tbody.innerHTML = active.map(function(c){
       var salary = Number(c.proposed_amount) || 0;
       var fee = +(salary * 0.05).toFixed(2);
-      var insuranceNote = c.coverage_amount_paid
-        ? '<span style="font-size:11px;color:var(--teal);">reimbursed if 1st payment</span>'
-        : '<span style="font-size:11px;color:var(--text-faint);">-</span>';
+      var insuranceAmount = 0;
+      var insuranceNote;
+      if(c.insurance_due_next_payment && typeof c.insurance_estimate_employer_currency === 'number'){
+        insuranceAmount = c.insurance_estimate_employer_currency;
+        var fxTag = c.insurance_estimate_fx_source && c.insurance_estimate_fx_source.indexOf('live')===0
+          ? '<span class="fx-tag live" style="margin-left:4px;">live</span>'
+          : '<span class="fx-tag fallback" style="margin-left:4px;">fallback</span>';
+        insuranceNote = '<span class="mono" style="color:var(--amber);">'+insuranceAmount+' '+c.employer_currency+'</span>'+fxTag
+          + '<br><span style="font-size:10px;color:var(--text-faint);">exact premium billed to MyCover, converted at today\'s rate</span>';
+      } else if(c.insurance_due_next_payment){
+        insuranceNote = '<span style="font-size:11px;color:var(--red);">due — rate lookup failed, see receipt after disburse</span>';
+      } else if(c.coverage_amount_paid){
+        insuranceNote = '<span style="font-size:11px;color:var(--text-faint);">already reimbursed on a prior payment</span>';
+      } else {
+        insuranceNote = '<span style="font-size:11px;color:var(--text-faint);">-</span>';
+      }
+      var rowTotal = (salary + fee + insuranceAmount).toFixed(2);
       return '<tr>'
-        + '<td><input type="checkbox" class="payroll-check" data-contract="'+c.contract_id+'" data-salary="'+salary+'" data-fee="'+fee+'" onchange="updatePayrollTotals()"></td>'
+        + '<td><input type="checkbox" class="payroll-check" data-contract="'+c.contract_id+'" data-salary="'+salary+'" data-fee="'+fee+'" data-insurance="'+insuranceAmount+'" onchange="updatePayrollTotals()"></td>'
         + '<td>'+c.talent_name+'<br><span style="color:var(--text-faint);font-family:\'IBM Plex Mono\',monospace;font-size:10px;">'+c.contract_id+'</span></td>'
         + '<td class="mono">'+salary+' '+c.employer_currency+'</td>'
         + '<td class="mono">'+fee+' '+c.employer_currency+'</td>'
         + '<td>'+insuranceNote+'</td>'
-        + '<td class="mono">computed on disburse</td></tr>';
+        + '<td class="mono">'+rowTotal+' '+c.employer_currency+'</td></tr>';
     }).join('');
     updatePayrollTotals();
   }).catch(function(){});
@@ -527,14 +541,17 @@ document.getElementById('refreshPayrollBtn').onclick = renderPayrollSelect;
 function updatePayrollTotals(){
   var checked = Array.prototype.slice.call(document.querySelectorAll('.payroll-check:checked'));
   document.getElementById('payrollSelectedCount').textContent = checked.length;
-  var totalSalary = 0, totalFee = 0;
+  var totalSalary = 0, totalFee = 0, totalInsurance = 0;
   checked.forEach(function(cb){
     totalSalary += parseFloat(cb.dataset.salary) || 0;
     totalFee += parseFloat(cb.dataset.fee) || 0;
+    totalInsurance += parseFloat(cb.dataset.insurance) || 0;
   });
   document.getElementById('payrollTotalSalary').textContent = checked.length ? totalSalary.toFixed(2) : '-';
-  document.getElementById('payrollTotalExtras').textContent = checked.length ? ('+' + totalFee.toFixed(2) + ' fee (+ insurance if applicable)') : '-';
-  document.getElementById('payrollGrandTotal').textContent = checked.length ? (totalSalary + totalFee).toFixed(2) + '+' : '-';
+  document.getElementById('payrollTotalExtras').textContent = checked.length
+    ? (totalFee.toFixed(2) + ' fee' + (totalInsurance ? ' + ' + totalInsurance.toFixed(2) + ' insurance' : ''))
+    : '-';
+  document.getElementById('payrollGrandTotal').textContent = checked.length ? (totalSalary + totalFee + totalInsurance).toFixed(2) : '-';
   document.getElementById('runPayrollBtn').disabled = checked.length === 0;
 }
 
