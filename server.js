@@ -741,6 +741,33 @@ function dropboxSignAuthHeader() {
  * talent has no email. Mirrors the exact structure of purchaseCoverage()
  * and issueSalaryAccount() — same graceful-degradation contract.
  */
+/**
+ * Explicit field placement for the real W-8BEN PDF. This exists because
+ * Dropbox Sign's auto-detection does NOT understand this document's native
+ * fields — it's an Adobe XFA form (confirmed via `pdfinfo`), and only the
+ * one genuine PDF /Sig field got auto-recognized. Every coordinate below
+ * was extracted directly from the real file with pdfplumber (exact point
+ * positions, not eyeballed), so these line up with the actual printed
+ * labels — Name (1), Country of citizenship (2), Permanent residence
+ * address (3), Date of birth (8), then Part III's signature, date, and
+ * printed name. Deliberately NOT included: mailing address (4), US TIN
+ * (5), foreign tax ID (6a/6b), reference number (7), and all of Part II —
+ * every one of those is genuinely optional per the form's own instructions
+ * ("if required", "if different from above"), not skipped by oversight.
+ */
+function w8benFormFields(signerIndex) {
+  const page = 1;
+  return [
+    { api_id: 'name', name: 'Name of beneficial owner', type: 'text', x: 40, y: 238, width: 335, height: 14, required: true, signer: signerIndex, page },
+    { api_id: 'citizenship', name: 'Country of citizenship', type: 'text', x: 380, y: 238, width: 195, height: 14, required: true, signer: signerIndex, page },
+    { api_id: 'address', name: 'Permanent residence address', type: 'text', x: 40, y: 262, width: 535, height: 36, required: true, signer: signerIndex, page },
+    { api_id: 'dob', name: 'Date of birth (MM-DD-YYYY)', type: 'text', x: 298, y: 409, width: 270, height: 14, required: true, signer: signerIndex, page },
+    { api_id: 'signature', name: 'Signature', type: 'signature', x: 36, y: 700, width: 420, height: 20, required: true, signer: signerIndex, page },
+    { api_id: 'date_signed', name: 'Date signed', type: 'date_signed', x: 465, y: 700, width: 110, height: 20, required: true, signer: signerIndex, page },
+    { api_id: 'print_name', name: 'Print name of signer', type: 'text', x: 36, y: 726, width: 535, height: 16, required: true, signer: signerIndex, page },
+  ];
+}
+
 async function requestW8BenSignature({ contract, talent }) {
   if (contract.employer_country !== 'US') {
     return { w8ben_status: 'not_applicable', w8ben_note: `W-8BEN only applies to US-employer contracts (this one is ${contract.employer_country} — see taxFormMap for that jurisdiction's actual form)` };
@@ -762,6 +789,8 @@ async function requestW8BenSignature({ contract, talent }) {
     form.append('signers[0][name]', talent.name);
     form.append('metadata[contract_id]', contract.contract_id);
     form.append('test_mode', DROPBOX_SIGN_TEST_MODE ? '1' : '0');
+    // Explicit placement, NOT auto-detection — see w8benFormFields() above for why.
+    form.append('form_fields_per_document', JSON.stringify([w8benFormFields(0)]));
     form.append('files[]', new Blob([pdfBytes], { type: 'application/pdf' }), 'W-8BEN.pdf');
 
     const res = await fetch(`${DROPBOX_SIGN_BASE}/signature_request/send`, {
