@@ -167,8 +167,8 @@
       <div class="panel-head"><h2>Contracts</h2><p class="sub">GET /v1/contracts &mdash; wire instructions column shows the REAL salary account, once issued</p></div>
       <button class="row-btn" id="refreshContractsBtn" style="margin-bottom:14px;">Refresh</button>
       <div class="tbl-wrap">
-        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th>Salary account (wire here)</th></tr></thead>
-        <tbody id="contractsTableBody"><tr><td colspan="5" class="empty-state">// connect to load</td></tr></tbody></table>
+        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th>Salary account (wire here)</th><th>W-8BEN</th></tr></thead>
+        <tbody id="contractsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
 
@@ -428,14 +428,49 @@ function renderContracts(){
       } else {
         lastCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
       }
+
+      var w8benCell;
+      if(c.w8ben_status === 'signed'){
+        w8benCell = '<button class="row-btn" onclick="downloadW8Ben(\''+c.contract_id+'\',\''+c.talent_name+'\')">Download signed PDF</button>';
+      } else if(c.w8ben_status === 'not_applicable'){
+        w8benCell = '<span style="color:var(--text-faint);font-size:11px;">n/a (non-US)</span>';
+      } else if(c.w8ben_status === 'sent'){
+        w8benCell = '<span style="color:var(--amber);font-size:11px;">awaiting signature'+(c.w8ben_test_mode ? ' (test mode)' : '')+'</span>';
+      } else if(c.w8ben_status){
+        w8benCell = '<span style="color:var(--red);font-size:11px;">'+c.w8ben_status+(c.w8ben_note ? ': '+c.w8ben_note : '')+'</span>';
+      } else {
+        w8benCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      }
+
       return '<tr><td class="mono">'+c.contract_id+'</td><td>'+c.talent_name+'</td>'
         + '<td class="mono">'+(c.proposed_amount ? c.proposed_amount + ' ' + c.employer_currency : '-')+'</td>'
         + '<td><span class="status-pill status-'+c.status+'">'+c.status+'</span></td>'
-        + '<td>'+lastCell+'</td></tr>';
-    }).join('') : '<tr><td colspan="5" class="empty-state">// no contracts yet - send one from Engagements</td></tr>';
+        + '<td>'+lastCell+'</td>'
+        + '<td>'+w8benCell+'</td></tr>';
+    }).join('') : '<tr><td colspan="6" class="empty-state">// no contracts yet - send one from Engagements</td></tr>';
   }).catch(function(err){ showToast('Failed to load contracts: ' + err.message, true); });
 }
 document.getElementById('refreshContractsBtn').onclick = renderContracts;
+
+function downloadW8Ben(contractId, talentName){
+  fetch(BASE_URL + '/v1/contracts/' + contractId + '/w8ben', { headers: { Authorization: 'Bearer ' + API_KEY } })
+    .then(function(res){
+      if(!res.ok){ return res.json().then(function(err){ throw new Error(err.message || err.error || ('HTTP '+res.status)); }); }
+      return res.blob();
+    })
+    .then(function(blob){
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'W-8BEN-' + talentName.replace(/\s+/g,'_') + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast('Downloaded');
+    })
+    .catch(function(err){ showToast('Download failed: ' + err.message, true); });
+}
 
 /* PAY PERIODS */
 function renderPayPeriods(){

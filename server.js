@@ -2,6 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import PDFDocument from 'pdfkit';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import multer from 'multer';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const multipartParser = multer(); // Dropbox Sign webhooks arrive as multipart/form-data, not JSON — see the DROPBOX SIGN section below
 
 const app = express();
 app.use(cors());
@@ -698,6 +705,95 @@ function settleOldestUnpaidPeriod(contractId) {
   return period;
 }
 
+/* ---------------------------------------------------------------------- *
+ * DROPBOX SIGN — real IRS Form W-8BEN, real e-signature. Only applies to
+ * US-employer contracts (that's the only country currently mapped to
+ * W-8BEN in taxFormMap). The actual PDF sent for signature is the real
+ * government file (assets/fw8ben.pdf) — an Adobe XFA form with an actual
+ * cryptographic signature field, not something we recreated — Dropbox
+ * Sign handles the parts of this that are genuinely hard to get right
+ * ourselves: rendering, signature capture, audit trail, compliance.
+ *
+ * Auth: HTTP Basic, API key as username, blank password — confirmed
+ * against Dropbox Sign's current docs, not assumed.
+ * Webhooks: arrive as multipart/form-data with a field named "json" (NOT
+ * a raw JSON body) — a real, easy-to-miss quirk of this specific API.
+ * Verification: HMAC-SHA256 of (event_time + event_type), keyed by the
+ * SAME API key used to authenticate requests — no separate webhook secret.
+ * Response requirement: Dropbox Sign requires the literal response body
+ * "Hello API Event Received" or it treats the callback as failed and
+ * retries up to 6 times, then disables the URL after 10 failures.
+ * ---------------------------------------------------------------------- */
+const DROPBOX_SIGN_API_KEY = process.env.DROPBOX_SIGN_API_KEY;
+const DROPBOX_SIGN_TEST_MODE = process.env.DROPBOX_SIGN_TEST_MODE !== 'false'; // defaults to TRUE — safe by default, must opt in to live
+const DROPBOX_SIGN_CONFIGURED = Boolean(DROPBOX_SIGN_API_KEY);
+const DROPBOX_SIGN_BASE = 'https://api.hellosign.com/v3';
+const W8BEN_PDF_PATH = path.join(__dirname, 'assets', 'fw8ben.pdf');
+
+function dropboxSignAuthHeader() {
+  return 'Basic ' + Buffer.from(`${DROPBOX_SIGN_API_KEY}:`).toString('base64');
+}
+
+/**
+ * Sends the REAL IRS W-8BEN PDF to the talent for signature via Dropbox
+ * Sign. Gracefully no-ops (never throws) if not configured, if this
+ * contract's employer isn't US-based (W-8BEN doesn't apply), or if the
+ * talent has no email. Mirrors the exact structure of purchaseCoverage()
+ * and issueSalaryAccount() — same graceful-degradation contract.
+ */
+async function requestW8BenSignature({ contract, talent }) {
+  if (contract.employer_country !== 'US') {
+    return { w8ben_status: 'not_applicable', w8ben_note: `W-8BEN only applies to US-employer contracts (this one is ${contract.employer_country} — see taxFormMap for that jurisdiction's actual form)` };
+  }
+  if (!DROPBOX_SIGN_CONFIGURED) {
+    return { w8ben_status: 'gap_not_wired', w8ben_note: 'DROPBOX_SIGN_API_KEY not set' };
+  }
+  if (!talent.email) {
+    return { w8ben_status: 'gap_missing_kyc', w8ben_note: 'Talent has no email on file' };
+  }
+
+  try {
+    const pdfBytes = fs.readFileSync(W8BEN_PDF_PATH);
+    const form = new FormData();
+    form.append('title', 'Form W-8BEN');
+    form.append('subject', `W-8BEN for your contract with ${contract.employer_name}`);
+    form.append('message', 'Please complete and sign your W-8BEN so this can be provided to your employer for their tax records. This does not get sent to the IRS.');
+    form.append('signers[0][email_address]', talent.email);
+    form.append('signers[0][name]', talent.name);
+    form.append('metadata[contract_id]', contract.contract_id);
+    form.append('test_mode', DROPBOX_SIGN_TEST_MODE ? '1' : '0');
+    form.append('files[]', new Blob([pdfBytes], { type: 'application/pdf' }), 'W-8BEN.pdf');
+
+    const res = await fetch(`${DROPBOX_SIGN_BASE}/signature_request/send`, {
+      method: 'POST',
+      headers: { Authorization: dropboxSignAuthHeader() },
+      body: form,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error?.error_msg || `dropbox_sign_${res.status}`);
+
+    return {
+      w8ben_status: 'sent',
+      w8ben_signature_request_id: data.signature_request.signature_request_id,
+      w8ben_test_mode: Boolean(data.signature_request.test_mode),
+      w8ben_note: null,
+    };
+  } catch (err) {
+    console.warn('[dropbox-sign] send failed:', err.message);
+    return { w8ben_status: 'send_failed', w8ben_note: err.message };
+  }
+}
+
+function verifyDropboxSignEventHash(eventTime, eventType, eventHash) {
+  if (!DROPBOX_SIGN_API_KEY || !eventHash) return false;
+  try {
+    const expected = crypto.createHmac('sha256', DROPBOX_SIGN_API_KEY).update(String(eventTime) + eventType).digest('hex');
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(eventHash));
+  } catch {
+    return false; // length mismatch etc.
+  }
+}
+
 /**
  * Verifies a MyCover/Felicity webhook signature — exact logic from the
  * integration doc, both modes.
@@ -1023,6 +1119,33 @@ app.post('/admin/fincra/retry/:contractId', requireAdminKey, async (req, res) =>
   res.json(contract);
 });
 
+// GET /admin/dropbox-sign/status — is W-8BEN collection configured
+app.get('/admin/dropbox-sign/status', requireAdminKey, (req, res) => {
+  res.json({
+    configured: DROPBOX_SIGN_CONFIGURED,
+    test_mode: DROPBOX_SIGN_TEST_MODE,
+    note: !DROPBOX_SIGN_CONFIGURED
+      ? 'Not configured — set DROPBOX_SIGN_API_KEY.'
+      : DROPBOX_SIGN_TEST_MODE
+        ? 'Configured in TEST MODE — signatures are watermarked and not legally binding. Set DROPBOX_SIGN_TEST_MODE=false to go live.'
+        : 'Configured, LIVE — signatures are real and legally binding.'
+  });
+});
+
+// POST /admin/dropbox-sign/retry/:contractId — retry a failed/skipped
+// W-8BEN send (e.g. after the talent's email was corrected).
+app.post('/admin/dropbox-sign/retry/:contractId', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status !== 'active') return res.status(409).json({ error: 'contract_not_active', message: 'Talent must have accepted the contract first.' });
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (!talent) return res.status(404).json({ error: 'talent_not_found' });
+  const w8ben = await requestW8BenSignature({ talent, contract });
+  Object.assign(contract, w8ben);
+  await saveState();
+  res.json(contract);
+});
+
 // GET /admin/overview — see EVERYTHING across EVERY client at once. This is
 // your answer to "where do I see what's going on in Tobi vs. the console" —
 // without this, you'd have to manually swap keys in the regular console to
@@ -1319,6 +1442,10 @@ async function finalizeContractAcceptance(contract) {
     // was actually just purchased (or correctly omit that leg if it wasn't).
     const salary = await issueSalaryAccount({ talent, contract });
     Object.assign(contract, salary);
+
+    // W-8BEN — gracefully no-ops for non-US contracts (see taxFormMap).
+    const w8ben = await requestW8BenSignature({ talent, contract });
+    Object.assign(contract, w8ben);
   }
 
   // First pay period starts NOW, regardless of whether VA issuance
@@ -1503,6 +1630,32 @@ app.get('/v1/contracts/:id/pay-periods', (req, res) => {
     .sort((a, b) => a.period_number - b.period_number)
     .map(p => ({ ...p, status: payPeriodStatus(p) }));
   res.json({ count: periods.length, results: periods });
+});
+
+// GET /v1/contracts/:id/w8ben — downloads the REAL signed PDF from Dropbox
+// Sign on demand (nothing is cached locally — always fetches the current
+// signed document live). This is what an enterprise's dashboard would call;
+// for now, the console has the same button, since there's no separate
+// enterprise dashboard yet.
+app.get('/v1/contracts/:id/w8ben', async (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
+  if (!contract.w8ben_signature_request_id) return res.status(404).json({ error: 'w8ben_not_requested', message: `Current status: ${contract.w8ben_status || 'none'}` });
+  if (contract.w8ben_status !== 'signed') return res.status(409).json({ error: 'w8ben_not_yet_signed', status: contract.w8ben_status });
+  if (!DROPBOX_SIGN_CONFIGURED) return res.status(422).json({ error: 'dropbox_sign_not_configured' });
+
+  try {
+    const dlRes = await fetch(`${DROPBOX_SIGN_BASE}/signature_request/files/${contract.w8ben_signature_request_id}?file_type=pdf`, {
+      headers: { Authorization: dropboxSignAuthHeader() },
+    });
+    if (!dlRes.ok) throw new Error(`dropbox_sign_download_${dlRes.status}`);
+    const buffer = Buffer.from(await dlRes.arrayBuffer());
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="W-8BEN-${contract.talent_name.replace(/\s+/g, '_')}.pdf"`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(502).json({ error: 'download_failed', message: err.message });
+  }
 });
 
 // POST /v1/payroll/disburse
@@ -1782,6 +1935,68 @@ app.post(['/webhooks/felicity', '/webhooks/mycover', '/webhooks/felicity-fincra'
 
   await saveState();
   res.status(200).json({ received: true, matched: true, contract_id: result.contract.contract_id, new_status: result.new_status });
+});
+
+/* ---------------------------------------------------------------------- *
+ * POST /webhooks/dropbox-sign — PUBLIC. Register this exact URL in
+ * Dropbox Sign's API Settings (account callback or app callback):
+ *   https://fetchtalos.onrender.com/webhooks/dropbox-sign
+ * No separate secret to configure — verification reuses DROPBOX_SIGN_API_KEY.
+ *
+ * Two real quirks handled here, both confirmed against current docs:
+ * 1. The payload arrives as multipart/form-data with a field named "json"
+ *    (not a raw JSON body) — multipartParser.none() extracts that field.
+ * 2. Dropbox Sign requires the EXACT response body "Hello API Event
+ *    Received" (with a 200 status) or it treats the callback as failed —
+ *    up to 6 retries, then email alerts, then the URL gets auto-disabled
+ *    after 10 consecutive failures. Getting this response text wrong
+ *    silently breaks the whole integration over time, not immediately.
+ * ---------------------------------------------------------------------- */
+app.post('/webhooks/dropbox-sign', multipartParser.none(), async (req, res) => {
+  let payload;
+  try {
+    payload = JSON.parse(req.body?.json || '{}');
+  } catch {
+    return res.status(400).send('bad payload'); // malformed — safe to reject outright, not a valid Dropbox Sign request
+  }
+
+  const { event_time, event_type, event_hash } = payload.event || {};
+  const valid = verifyDropboxSignEventHash(event_time, event_type, event_hash);
+  if (!valid) return res.status(401).send('invalid signature');
+
+  // Required handshake when the callback URL is first registered/tested.
+  if (event_type === 'callback_test') {
+    return res.status(200).send('Hello API Event Received');
+  }
+
+  try {
+    if (event_type === 'signature_request_all_signed') {
+      const sigReqId = payload.signature_request?.signature_request_id;
+      const contract = [...db.contracts.values()].find(c => c.w8ben_signature_request_id === sigReqId);
+      if (contract) {
+        contract.w8ben_status = 'signed';
+        await saveState();
+      } else {
+        console.warn(`[dropbox-sign webhook] signature_request_all_signed for unknown request ${sigReqId}`);
+      }
+    } else if (event_type === 'signature_request_declined') {
+      const sigReqId = payload.signature_request?.signature_request_id;
+      const contract = [...db.contracts.values()].find(c => c.w8ben_signature_request_id === sigReqId);
+      if (contract) {
+        contract.w8ben_status = 'declined';
+        await saveState();
+      }
+    }
+  } catch (err) {
+    // Never let our own processing bug turn into a retry storm that
+    // eventually gets Dropbox Sign to disable the whole callback URL —
+    // log it, still acknowledge receipt.
+    console.warn('[dropbox-sign webhook] processing error:', err.message);
+  }
+
+  // ALWAYS this exact string — required by Dropbox Sign regardless of
+  // which event type was processed.
+  res.status(200).send('Hello API Event Received');
 });
 
 const PORT = process.env.PORT || 3000;
