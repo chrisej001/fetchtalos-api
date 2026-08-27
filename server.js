@@ -1610,8 +1610,20 @@ app.post('/admin/felicity-ngn/buy-insurance-now/:contractId', requireAdminKey, a
   const talent = db.talents.find(t => t.talent_id === contract.talent_id);
   if (!talent) return res.status(404).json({ error: 'talent_not_found' });
 
+  const hadDocumentBefore = Boolean(contract.coverage_policy_document_url);
   const coverage = await buyInsuranceNgn({ talent, contract });
   Object.assign(contract, coverage);
+
+  // The real webhook path (handleFelicityNgnWebhookEvent) already emails
+  // the talent when a policy document shows up. This manual correction
+  // tool skipped that — worth fixing, since (per the doc) test mode
+  // actually returns the document URL immediately in THIS response, not
+  // via the async second webhook, so without this the talent would never
+  // hear about it at all when insurance is fixed this way.
+  if (contract.coverage_policy_document_url && !hadDocumentBefore) {
+    await sendPolicyDocumentEmail(contract, talent);
+  }
+
   await saveState();
   res.json(contract);
 });
@@ -1703,6 +1715,24 @@ app.post('/admin/contracts/:id/resend-welcome-email', requireAdminKey, async (re
   const talent = db.talents.find(t => t.talent_id === contract.talent_id);
   if (!talent?.email) return res.status(422).json({ error: 'talent_missing_email' });
   await sendWelcomeEmail(contract, talent);
+  res.json({ sent: true, to: talent.email });
+});
+
+// POST /admin/contracts/:id/resend-policy-document-email — unconditional,
+// unlike check-policy (which only emails on a genuine null→populated
+// TRANSITION). If a policy document was ever saved to the contract
+// without the email actually going out at that moment — e.g. via
+// buy-insurance-now before it had this step wired in — check-policy alone
+// can never fix that retroactively, since as far as its own transition
+// logic is concerned, nothing "just arrived." This sends it regardless of
+// whether anything changed.
+app.post('/admin/contracts/:id/resend-policy-document-email', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (!contract.coverage_policy_document_url) return res.status(409).json({ error: 'no_document_yet', message: 'This contract has no policy document saved yet — use check-policy first.' });
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (!talent?.email) return res.status(422).json({ error: 'talent_missing_email' });
+  await sendPolicyDocumentEmail(contract, talent);
   res.json({ sent: true, to: talent.email });
 });
 
