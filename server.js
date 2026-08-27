@@ -373,6 +373,8 @@ const REQUIRED_FIELD_TO_TALENT_PROP = {
   nin: 'nin',
   image_url: 'image_url',
   bvn: 'bvn',
+  gender: 'gender',
+  address: 'address',
   rubies_account_number: 'rubies_account_number',
   rubies_account_name: 'rubies_account_name',
   rubies_bank_code: 'rubies_bank_code',
@@ -387,6 +389,8 @@ const FIELD_LABELS = {
   nin: 'NIN (National Identification Number) — 11 digits',
   image_url: 'Selfie photo URL',
   bvn: 'BVN (Bank Verification Number)',
+  gender: 'Gender',
+  address: 'Home address',
   rubies_account_number: 'Your Nigerian bank account number (for salary payout)',
   rubies_account_name: 'Your full name, exactly as it appears on your bank account (NOT your bank\'s name)',
   rubies_bank_code: 'Your bank\'s CBN code — e.g. GTBank = 058, Rubies MFB = 090175 (ask your bank if unsure)',
@@ -773,11 +777,16 @@ function ngnMissingFormFields(talent) {
   if (!FELICITY_NGN_CONFIGURED) return [];
   // phone/dob/bvn/nin -> needed for onboard_talent. rubies_account_* ->
   // needed later, for THIS flow's own send-to-talent step in
-  // settleNgnPayment — deliberately checked here directly rather than via
-  // fincraMissingFormFields, since that helper is gated behind
-  // FINCRA_CONFIGURED, which has nothing to do with whether the NGN rail
-  // is configured. The NGN flow needs these fields on its own terms.
-  const required = ['phone', 'dob', 'bvn', 'nin', 'rubies_account_number', 'rubies_account_name', 'rubies_bank_code'];
+  // settleNgnPayment. gender/address -> needed for buy_insurance, which
+  // fires AUTOMATICALLY off a webhook at first payment — there is no
+  // human in the loop at that moment to ask for a missing field the way
+  // the old MyCover flow could afford to discover lazily. Confirmed via a
+  // real 400 (missing_required_field: gender) that these are genuinely
+  // required on real products, not just the sandbox catalog. Checked
+  // directly here rather than via fincraMissingFormFields, since that
+  // helper is gated behind FINCRA_CONFIGURED, which has nothing to do
+  // with whether the NGN rail is configured.
+  const required = ['phone', 'dob', 'bvn', 'nin', 'gender', 'address', 'rubies_account_number', 'rubies_account_name', 'rubies_bank_code'];
   return required.filter(prop => !talent[prop]).map(prop =>
     Object.entries(REQUIRED_FIELD_TO_TALENT_PROP).find(([, v]) => v === prop)?.[0] || prop
   );
@@ -853,6 +862,15 @@ async function buyInsuranceNgn({ talent, contract }) {
       customer_phone: talent.phone,
       date_of_birth: talent.dob,
       customer_nin: talent.nin,
+      gender: talent.gender,
+      address: talent.address,
+      // NOT sent: `benefits` — the doc describes this as an array matched
+      // against the SPECIFIC product's own benefit line items, which
+      // varies per product. Unlike gender/address (fixed talent
+      // attributes with one obviously correct value), there's no safe
+      // default here without knowing that product's actual benefit
+      // categories. If a future error names this as missing too, that's
+      // the next real gap to close — not something to guess at now.
     };
     const result = await felicityNgn('buy_insurance', payload);
     return {
@@ -2063,11 +2081,28 @@ function renderKycForm(contract, missingFields, token) {
     bvn: 'e.g. 22222222222',
     customer_phone: 'e.g. 08012345678',
     phone: 'e.g. 08012345678',
+    address: 'e.g. 10 Example Street, Lagos',
   };
   const rows = missingFields.map(f => {
     const label = FIELD_LABELS[f] || f;
-    const type = f === 'date_of_birth' || f === 'customer_dob' ? 'date' : 'text';
     const placeholder = PLACEHOLDERS[f] || '';
+    if (f === 'gender') {
+      // A real select, not free text — Felicity expects the exact strings
+      // "Male" or "Female", no default, no way to infer it. Free text
+      // risks a typo or case mismatch producing the exact same validation
+      // failure this field was added to fix.
+      return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
+        <select name="${f}" required style="padding:8px;width:336px;max-width:90vw;font-size:14px;">
+          <option value="">Select…</option>
+          <option value="Male">Male</option>
+          <option value="Female">Female</option>
+        </select>`;
+    }
+    if (f === 'address') {
+      return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
+        <textarea name="${f}" required placeholder="${placeholder}" style="padding:8px;width:320px;max-width:90vw;font-size:14px;height:60px;"></textarea>`;
+    }
+    const type = f === 'date_of_birth' || f === 'customer_dob' ? 'date' : 'text';
     return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
       <input name="${f}" type="${type}" ${placeholder ? `placeholder="${placeholder}"` : ''} required style="padding:8px;width:320px;max-width:90vw;font-size:14px;">`;
   }).join('');
