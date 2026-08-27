@@ -845,12 +845,53 @@ async function buyInsuranceNgn({ talent, contract }) {
       coverage_reference: result.policy.policy_reference,
       coverage_product_id: product_id,
       coverage_amount_paid: result.policy.premium_naira,
+      // ALWAYS null at this exact moment — the document doesn't exist yet
+      // on ANY purchase, per the doc's explicit callout. It arrives later,
+      // asynchronously, via a SECOND talent.policy_issued webhook (see
+      // handleFelicityNgnWebhookEvent) — never poll for it synchronously.
+      coverage_policy_document_url: result.policy.policy_document_url || null,
+      coverage_start_date: result.policy.start_date || null,
+      coverage_expiration_date: result.policy.expiration_date || null,
       coverage_note: null,
     };
   } catch (err) {
     console.warn('[felicity-ngn] buy_insurance failed:', err.message);
     return { coverage_status: 'purchase_failed', coverage_note: err.message };
   }
+}
+
+/** Thin wrapper around get_policy — same white-labeled shape as buy, used
+ * to manually re-check whether the document has landed yet (useful for a
+ * demo, or as a fallback if a webhook delivery was ever missed). */
+async function getPolicyNgn(policy_reference) {
+  return felicityNgn('get_policy', { policy_reference });
+}
+
+/**
+ * Fired specifically when the policy DOCUMENT becomes available — not the
+ * same moment as "insurance purchased." Per the doc, policy_document_url
+ * is null on every purchase response, always, and only shows up later via
+ * a SECOND talent.policy_issued webhook. This means the original "you've
+ * been paid" email (sent right after purchase) can never include this
+ * link — it genuinely doesn't exist yet at that point. This is the
+ * separate notification that closes that gap once it's real.
+ */
+async function sendPolicyDocumentEmail(contract, talent) {
+  if (!talent?.email) return { sent: false, reason: 'talent_missing_email' };
+  return sendEmail({
+    to: talent.email,
+    subject: `Your health insurance policy document is ready`,
+    html: `<p>Hi ${contract.talent_name},</p>
+      <p>Your policy document for ${contract.employer_name}'s coverage is now available:</p>
+      <ul>
+        <li><b>Policy number:</b> ${contract.coverage_policy_id || ''}</li>
+        ${contract.coverage_start_date ? `<li><b>Start date:</b> ${contract.coverage_start_date}</li>` : ''}
+        ${contract.coverage_expiration_date ? `<li><b>Expires:</b> ${contract.coverage_expiration_date}</li>` : ''}
+        <li><b>Document:</b> <a href="${contract.coverage_policy_document_url}">${contract.coverage_policy_document_url}</a></li>
+      </ul>
+      <p>Keep this email — it's your record.</p>
+      <p>— FetchTalos</p>`
+  });
 }
 
 /** Thin wrapper around the `send` action. */
@@ -958,7 +999,7 @@ async function settleNgnPayment(contract) {
         <p>Your payment for this pay period has landed.</p>
         <ul>
           <li><b>Amount:</b> ₦${remainingForTalent.toLocaleString()}</li>
-          ${isFirstPayment && contract.coverage_status === 'active' ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id}</li>` : ''}
+          ${isFirstPayment && contract.coverage_status === 'active' ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id} (your policy document follows in a separate email once it's ready)</li>` : ''}
           ${settledPeriod ? `<li><b>Pay period:</b> #${settledPeriod.period_number}</li>` : ''}
           ${nextPeriod ? `<li><b>Next payment due:</b> ${new Date(nextPeriod.due_date).toLocaleDateString()}</li>` : ''}
         </ul>
@@ -1380,6 +1421,38 @@ app.post('/admin/felicity-ngn/resettle/:contractId', requireAdminKey, async (req
   Object.assign(contract, settlement);
   await saveState();
   res.json(contract);
+});
+
+// POST /admin/felicity-ngn/check-policy/:contractId — manually re-check
+// whether the policy document has arrived yet, without waiting for the
+// real (asynchronous, provider-timed) webhook — mainly for demos. Reuses
+// the exact same "did the document just become available" detection as
+// the real webhook handler, so the email fires correctly here too, not
+// just on the real webhook path.
+app.post('/admin/felicity-ngn/check-policy/:contractId', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (!contract.coverage_reference) return res.status(409).json({ error: 'no_policy_purchased_yet' });
+
+  try {
+    const result = await getPolicyNgn(contract.coverage_reference);
+    const documentUrl = result.policy?.policy_document_url || null;
+    const documentJustArrived = documentUrl && !contract.coverage_policy_document_url;
+
+    if (documentUrl) contract.coverage_policy_document_url = documentUrl;
+    if (result.policy?.start_date) contract.coverage_start_date = result.policy.start_date;
+    if (result.policy?.expiration_date) contract.coverage_expiration_date = result.policy.expiration_date;
+
+    if (documentJustArrived) {
+      const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+      await sendPolicyDocumentEmail(contract, talent);
+    }
+
+    await saveState();
+    res.json({ contract, document_just_arrived: documentJustArrived });
+  } catch (err) {
+    res.status(502).json({ error: 'get_policy_failed', message: err.message });
+  }
 });
 
 // GET /admin/fincra/payout-status/:contractId — real ledger for this
@@ -2433,6 +2506,28 @@ async function handleFelicityNgnWebhookEvent(event, body) {
     contract.ngn_note = body.reason || contract.ngn_note;
   } else if (event === 'talent.policy_issued') {
     contract.coverage_status = 'active';
+    // Defensive extraction — the doc describes WHEN this fires (twice) and
+    // WHAT field appears (policy_document_url), but doesn't spell out the
+    // exact webhook body shape, unlike buy_insurance's response. Checking
+    // a few reasonable locations rather than assuming one.
+    const documentUrl = body.policy_document_url || body.policy?.policy_document_url || body.data?.policy_document_url || null;
+    const startDate = body.start_date || body.policy?.start_date || null;
+    const expirationDate = body.expiration_date || body.policy?.expiration_date || null;
+
+    // This is the SECOND fire, specifically — the document just became
+    // available where it wasn't before. Only NOW does it make sense to
+    // notify the talent; emailing them at the first fire would just be a
+    // broken/dead link, since the doc doesn't exist yet at that point.
+    const documentJustArrived = documentUrl && !contract.coverage_policy_document_url;
+
+    if (documentUrl) contract.coverage_policy_document_url = documentUrl;
+    if (startDate) contract.coverage_start_date = startDate;
+    if (expirationDate) contract.coverage_expiration_date = expirationDate;
+
+    if (documentJustArrived) {
+      const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+      await sendPolicyDocumentEmail(contract, talent);
+    }
   } else if (event === 'talent.policy_failed') {
     contract.coverage_status = 'purchase_failed';
     contract.coverage_note = body.reason || contract.coverage_note;
