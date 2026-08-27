@@ -336,6 +336,19 @@ const COVERAGE_PRODUCT_BENEFITS = {
   remote_contractor_basic: ['Primary Care', 'Telemedicine'],
 };
 
+// buy_insurance also requires `payment_plan` — a string, not tied to the
+// product catalog the way benefits is. 'annually' for 12 months is a
+// DIRECT, complete example straight from the doc's own worked sandbox
+// walkthrough (§6), not inferred. The other three are a reasonable
+// mapping from standard insurance terminology, but — unlike 'annually' —
+// not confirmed against a real response yet. If a non-12-month NGN
+// contract's purchase ever fails with a payment_plan-related error, that's
+// the one to fix with a real confirmed value, not assume this guess is right.
+function ngnPaymentPlan(months) {
+  const map = { 1: 'monthly', 3: 'quarterly', 6: 'biannually', 12: 'annually' };
+  return map[months] || 'annually';
+}
+
 // MyCover doesn't always return a clean `status` field — this mirrors the
 // exact "treat as active" logic from the integration doc.
 function isPolicyActive(policyData) {
@@ -888,6 +901,7 @@ async function buyInsuranceNgn({ talent, contract }) {
       gender: talent.gender,
       address: talent.address,
       benefits,
+      payment_plan: ngnPaymentPlan(contract.coverage_months),
     };
     const result = await felicityNgn('buy_insurance', payload);
     return {
