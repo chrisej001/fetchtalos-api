@@ -370,6 +370,7 @@ const REQUIRED_FIELD_TO_TALENT_PROP = {
   date_of_birth: 'dob',
   customer_dob: 'dob',
   customer_nin: 'nin',
+  nin: 'nin',
   image_url: 'image_url',
   bvn: 'bvn',
   rubies_account_number: 'rubies_account_number',
@@ -382,7 +383,8 @@ const FIELD_LABELS = {
   phone: 'Phone number',
   date_of_birth: 'Date of birth',
   customer_dob: 'Date of birth',
-  customer_nin: 'NIN (National Identification Number)',
+  customer_nin: 'NIN (National Identification Number) — 11 digits',
+  nin: 'NIN (National Identification Number) — 11 digits',
   image_url: 'Selfie photo URL',
   bvn: 'BVN (Bank Verification Number)',
   rubies_account_number: 'Your Nigerian bank account number (for salary payout)',
@@ -706,6 +708,274 @@ function settleOldestUnpaidPeriod(contractId) {
 }
 
 /* ---------------------------------------------------------------------- *
+ * FELICITY NGN RAIL — the domestic (NG enterprise -> NG talent) path.
+ * Structurally different from the Fincra/USD flow, not a copy of it: each
+ * talent gets their OWN real Rubies NUBAN with a real NGN balance
+ * (`onboard_talent`), insurance is bought DIRECTLY against that balance
+ * (`buy_insurance` — no separate reimbursement leg needed, since premium
+ * and balance are already the same currency), and there is NO automatic
+ * split — WE explicitly `send` out the platform fee, any hub markup, and
+ * the talent's own salary, in that order, every time a payment lands.
+ * Used when a contract's employer_currency is NGN; the existing Fincra/
+ * W-8BEN paths are untouched and still handle everything else.
+ * ---------------------------------------------------------------------- */
+const FELICITY_NGN_API_KEY = process.env.FELICITY_NGN_PARTNER_KEY;
+const FELICITY_NGN_CONFIGURED = Boolean(FELICITY_NGN_API_KEY);
+const FELICITY_NGN_BASE = 'https://jtotljjdyhxjbbsnpuml.supabase.co/functions/v1/partner-api';
+
+async function felicityNgn(action, payload = {}) {
+  const res = await fetch(FELICITY_NGN_BASE, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${FELICITY_NGN_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const err = new Error(json?.error || json?.message || `felicity_ngn_${res.status}`);
+    err.status = res.status;
+    err.body = json;
+    throw err;
+  }
+  return json;
+}
+
+// International format required — "2348012345678", not "08012345678".
+// Confirmed explicitly in the integration brief as a real gotcha.
+function toInternationalPhone(phone) {
+  if (!phone) return phone;
+  const digits = String(phone).replace(/\D/g, '');
+  if (digits.startsWith('234')) return digits;
+  if (digits.startsWith('0')) return '234' + digits.slice(1);
+  return '234' + digits;
+}
+
+// Same fields the Fincra KYC form already asks for, PLUS nin — the one
+// genuinely new field this rail needs that nothing else in the system
+// collects. name/email are assumed present by the time a contract exists.
+function ngnMissingFormFields(talent) {
+  if (!FELICITY_NGN_CONFIGURED) return [];
+  // phone/dob/bvn/nin -> needed for onboard_talent. rubies_account_* ->
+  // needed later, for THIS flow's own send-to-talent step in
+  // settleNgnPayment — deliberately checked here directly rather than via
+  // fincraMissingFormFields, since that helper is gated behind
+  // FINCRA_CONFIGURED, which has nothing to do with whether the NGN rail
+  // is configured. The NGN flow needs these fields on its own terms.
+  const required = ['phone', 'dob', 'bvn', 'nin', 'rubies_account_number', 'rubies_account_name', 'rubies_bank_code'];
+  return required.filter(prop => !talent[prop]).map(prop =>
+    Object.entries(REQUIRED_FIELD_TO_TALENT_PROP).find(([, v]) => v === prop)?.[0] || prop
+  );
+}
+
+/**
+ * Issues the intermediate Rubies NUBAN a talent's salary actually lands on.
+ * This is NOT the talent's own bank account — it's a pass-through balance;
+ * the talent's real destination is their existing rubies_account_number
+ * (already collected for the Fincra flow) and money only reaches them via
+ * an explicit `send` call, made later when a payment settles.
+ */
+async function onboardTalentNgn({ talent, contract }) {
+  if (!FELICITY_NGN_CONFIGURED) {
+    return { ngn_status: 'gap_not_wired', ngn_note: 'FELICITY_NGN_PARTNER_KEY not set' };
+  }
+  const missing = ngnMissingFormFields(talent);
+  if (missing.length) {
+    return { ngn_status: 'gap_missing_kyc', ngn_note: `Talent missing field(s) for NGN onboarding: ${missing.join(', ')}` };
+  }
+
+  try {
+    const [firstName, ...rest] = talent.name.split(' ');
+    const result = await felicityNgn('onboard_talent', {
+      talent_ref: contract.contract_id,
+      first_name: firstName,
+      last_name: rest.join(' ') || firstName,
+      phone: toInternationalPhone(talent.phone),
+      email: talent.email,
+      date_of_birth: talent.dob,
+      bvn: talent.bvn,
+      nin: talent.nin,
+    });
+    const t = result.talent;
+    return {
+      ngn_status: 'onboarded',
+      ngn_talent_ref: contract.contract_id,
+      ngn_account_number: t.account_number,
+      ngn_account_name: t.account_name,
+      ngn_bank_name: t.bank_name,
+      ngn_note: null,
+    };
+  } catch (err) {
+    console.warn('[felicity-ngn] onboard_talent failed:', err.message);
+    return { ngn_status: err.status === 409 ? 'already_onboarded' : 'onboard_failed', ngn_note: err.message };
+  }
+}
+
+/**
+ * Buys insurance DIRECTLY against the talent's NGN balance — no fronting,
+ * no reimbursement leg, refunds are automatic on failure (per Felicity's
+ * own doc). Reuses the SAME coverage_plan -> product_id mapping and the
+ * SAME dynamic required-field resolution already built for the older
+ * MyCover proxy, since this confirmed uses the identical product catalog
+ * and required_fields shape — genuinely the same discovery-by-real-error
+ * pattern applies here too (gender/address/benefits on some real products
+ * aren't collected anywhere yet; a live purchase attempt will surface
+ * exactly what's missing via Felicity's own real validation message,
+ * passed through verbatim, same as the existing insurance flow).
+ */
+async function buyInsuranceNgn({ talent, contract }) {
+  const product_id = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
+  if (!product_id) return { coverage_status: 'gap_not_configured', coverage_note: `No product_id mapped for plan "${contract.coverage_plan}"` };
+
+  try {
+    const [firstName, ...rest] = talent.name.split(' ');
+    const payload = {
+      action: 'buy_insurance',
+      talent_ref: contract.contract_id,
+      product_id,
+      customer_first_name: firstName,
+      customer_last_name: rest.join(' ') || firstName,
+      customer_phone: talent.phone,
+      date_of_birth: talent.dob,
+      customer_nin: talent.nin,
+    };
+    const result = await felicityNgn('buy_insurance', payload);
+    return {
+      coverage_status: 'active',
+      coverage_policy_id: result.policy.policy_number,
+      coverage_reference: result.policy.policy_reference,
+      coverage_product_id: product_id,
+      coverage_amount_paid: result.policy.premium_naira,
+      coverage_note: null,
+    };
+  } catch (err) {
+    console.warn('[felicity-ngn] buy_insurance failed:', err.message);
+    return { coverage_status: 'purchase_failed', coverage_note: err.message };
+  }
+}
+
+/** Thin wrapper around the `send` action. */
+async function sendNgn({ talent_ref, amount_naira, account_number, bank_code, account_name }) {
+  return felicityNgn('send', { talent_ref, amount_naira, account_number, bank_code, account_name });
+}
+
+/**
+ * The core automatic orchestration, fired every time a payment lands on a
+ * talent's NGN balance (talent.va_credited webhook). In order:
+ *   1. If this is the FIRST ever payment for this contract, buy insurance
+ *      against the balance that just landed (debits the real premium).
+ *   2. Re-check the ACTUAL current balance (never assume — the real
+ *      premium can differ slightly from what was estimated when the
+ *      enterprise was told what to wire).
+ *   3. Send FetchTalos's platform fee to FetchTalos's own settlement account.
+ *   4. Send the hub's markup (if this pipeline's hub key has one
+ *      configured) to the HUB's own settlement account — the white-label
+ *      revenue share.
+ *   5. Send whatever's left to the talent's own real bank account.
+ *   6. Settle the pay period, email the talent.
+ * If the balance can't cover fee+markup after insurance, NOTHING is sent
+ * and the contract is flagged clearly — never guess or send a partial,
+ * wrong amount.
+ */
+async function settleNgnPayment(contract) {
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (!talent) return { ngn_settlement_note: 'talent_not_found' };
+
+  const alreadyPaidCount = [...db.payPeriods.values()].filter(p => p.contract_id === contract.contract_id && p.paid_at).length;
+  const isFirstPayment = alreadyPaidCount === 0;
+
+  if (isFirstPayment) {
+    const coverage = await buyInsuranceNgn({ talent, contract });
+    Object.assign(contract, coverage);
+  }
+
+  let currentBalanceKobo;
+  try {
+    const t = await felicityNgn('get_talent', { talent_ref: contract.contract_id });
+    currentBalanceKobo = t.talent.balance_kobo;
+  } catch (err) {
+    return { ngn_settlement_status: 'balance_check_failed', ngn_settlement_note: err.message };
+  }
+
+  const salaryNaira = Number(contract.proposed_amount) || 0;
+  const platformFeeNaira = +(salaryNaira * PLATFORM_FEE_BPS / 10000).toFixed(2);
+
+  const hubKeyRecord = Object.values(KEYS).find(k => k.type === 'hub' && k.hub_scope === talent.pipeline);
+  const hubMarkupBps = hubKeyRecord?.hub_markup_bps || 0;
+  const hubMarkupNaira = hubMarkupBps > 0 ? +(salaryNaira * hubMarkupBps / 10000).toFixed(2) : 0;
+  const hubSettlement = hubKeyRecord?.hub_settlement_account || null;
+
+  const currentBalanceNaira = currentBalanceKobo / 100;
+  // The talent's salary is a FIXED, PROTECTED amount — never computed as
+  // "whatever's left after fees." If the balance can't cover salary + fee
+  // + markup IN FULL, nothing is sent to anyone rather than silently
+  // shortchanging the talent to make the numbers fit. This was a real bug
+  // caught in testing: an earlier version computed the talent's amount as
+  // a leftover subtraction, which meant an enterprise underpayment reduced
+  // what the TALENT received instead of being flagged as a shortfall —
+  // directly contradicting the mark-up model's core guarantee that fees
+  // are always additive, never deducted from the talent.
+  const totalOwed = +(salaryNaira + platformFeeNaira + hubMarkupNaira).toFixed(2);
+  const remainingForTalent = salaryNaira;
+
+  if (currentBalanceNaira < totalOwed) {
+    return {
+      ngn_settlement_status: 'insufficient_balance',
+      ngn_settlement_note: `Balance (₦${currentBalanceNaira}) is short of what's owed: ₦${salaryNaira} salary + ₦${platformFeeNaira} platform fee + ₦${hubMarkupNaira} hub markup = ₦${totalOwed}. Nothing was sent — the talent's salary is never reduced to cover a shortfall.`,
+    };
+  }
+  if (hubMarkupNaira > 0 && !hubSettlement) {
+    return {
+      ngn_settlement_status: 'hub_settlement_account_missing',
+      ngn_settlement_note: `This hub has a markup (${hubMarkupBps}bps) configured but no settlement account on file — set one via PATCH /admin/keys/:apiKey before payments can settle.`,
+    };
+  }
+
+  try {
+    if (platformFeeNaira > 0 && PLATFORM_ACCOUNT) {
+      await sendNgn({ talent_ref: contract.contract_id, amount_naira: platformFeeNaira, account_number: PLATFORM_ACCOUNT.account_number, bank_code: PLATFORM_ACCOUNT.bank_code, account_name: PLATFORM_ACCOUNT.account_name });
+    }
+    if (hubMarkupNaira > 0 && hubSettlement) {
+      await sendNgn({ talent_ref: contract.contract_id, amount_naira: hubMarkupNaira, account_number: hubSettlement.account_number, bank_code: hubSettlement.bank_code, account_name: hubSettlement.account_name });
+    }
+    if (remainingForTalent > 0) {
+      await sendNgn({ talent_ref: contract.contract_id, amount_naira: remainingForTalent, account_number: talent.rubies_account_number, bank_code: talent.rubies_bank_code, account_name: talent.rubies_account_name });
+    }
+  } catch (err) {
+    console.warn('[felicity-ngn] send failed mid-settlement:', err.message);
+    return { ngn_settlement_status: 'send_failed', ngn_settlement_note: err.message };
+  }
+
+  const settledPeriod = settleOldestUnpaidPeriod(contract.contract_id);
+  const nextPeriod = settledPeriod ? [...db.payPeriods.values()]
+    .filter(p => p.contract_id === contract.contract_id && !p.paid_at)
+    .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0] : null;
+
+  if (talent.email) {
+    await sendEmail({
+      to: talent.email,
+      subject: `You've been paid — ₦${remainingForTalent.toLocaleString()} received`,
+      html: `<p>Hi ${contract.talent_name},</p>
+        <p>Your payment for this pay period has landed.</p>
+        <ul>
+          <li><b>Amount:</b> ₦${remainingForTalent.toLocaleString()}</li>
+          ${isFirstPayment && contract.coverage_status === 'active' ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id}</li>` : ''}
+          ${settledPeriod ? `<li><b>Pay period:</b> #${settledPeriod.period_number}</li>` : ''}
+          ${nextPeriod ? `<li><b>Next payment due:</b> ${new Date(nextPeriod.due_date).toLocaleDateString()}</li>` : ''}
+        </ul>
+        <p>— FetchTalos</p>`
+    });
+  }
+
+  return {
+    ngn_settlement_status: 'settled',
+    ngn_settlement_note: null,
+    ngn_last_platform_fee: platformFeeNaira,
+    ngn_last_hub_markup: hubMarkupNaira,
+    ngn_last_talent_amount: remainingForTalent,
+  };
+}
+
+/* ---------------------------------------------------------------------- *
  * DROPBOX SIGN — real IRS Form W-8BEN, real e-signature. Only applies to
  * US-employer contracts (that's the only country currently mapped to
  * W-8BEN in taxFormMap). The actual PDF sent for signature is the real
@@ -944,21 +1214,48 @@ function requireAdminKey(req, res, next) {
 }
 
 // POST /admin/keys — create a new client key without touching Render at all.
-// Body: { client_id, type: "enterprise" | "hub", hub_scope: "ALX Africa" }
+// Body: { client_id, type: "enterprise" | "hub", hub_scope: "ALX Africa",
+//          hub_markup_bps, hub_settlement_account: {account_number, account_name, bank_code} }
 // hub_scope is REQUIRED when type is "hub" — it's what locks that key's
 // talent discovery down to one pipeline. Omit type to default to "enterprise".
+// hub_markup_bps/hub_settlement_account are OPTIONAL and hub-only — this is
+// the white-label revenue share: a hub can charge their own markup on top
+// of FetchTalos's platform fee, paid to their OWN account, every time a
+// talent under their pipeline gets paid. Deliberately admin-set, not
+// hub-self-service — same trust boundary as hub_scope itself.
 // Persisted immediately if UPSTASH_REDIS_REST_URL/TOKEN are set — otherwise
 // this key dies the moment the server restarts (see PERSISTENCE section above).
 app.post('/admin/keys', requireAdminKey, async (req, res) => {
-  const { client_id, type = 'enterprise', hub_scope = null } = req.body || {};
+  const { client_id, type = 'enterprise', hub_scope = null, hub_markup_bps = 0, hub_settlement_account = null } = req.body || {};
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
   if (!['enterprise', 'hub'].includes(type)) return res.status(400).json({ error: 'type must be "enterprise" or "hub"' });
   if (type === 'hub' && !hub_scope) return res.status(400).json({ error: 'hub_scope is required when type is "hub"' });
 
   const newKey = `ft_live_${crypto.randomBytes(9).toString('hex')}`;
-  KEYS[newKey] = { client_id, type, hub_scope: type === 'hub' ? hub_scope : null };
+  KEYS[newKey] = {
+    client_id, type, hub_scope: type === 'hub' ? hub_scope : null,
+    hub_markup_bps: type === 'hub' ? Number(hub_markup_bps) || 0 : 0,
+    hub_settlement_account: type === 'hub' ? (hub_settlement_account || null) : null,
+  };
   await saveState();
-  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope, persisted: PERSISTENCE_ENABLED });
+  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope, hub_markup_bps: KEYS[newKey].hub_markup_bps, hub_settlement_account: KEYS[newKey].hub_settlement_account, persisted: PERSISTENCE_ENABLED });
+});
+
+// PATCH /admin/keys/:apiKey — set/update a hub's markup rate and settlement
+// account on a key that already exists. This is the endpoint you'd actually
+// use day to day, since hub keys are usually created once and their
+// commercial terms (markup %) negotiated/changed afterward.
+app.patch('/admin/keys/:apiKey', requireAdminKey, async (req, res) => {
+  const record = KEYS[req.params.apiKey];
+  if (!record) return res.status(404).json({ error: 'key_not_found' });
+  if (record.type !== 'hub') return res.status(400).json({ error: 'not_a_hub_key', message: 'Markup and settlement accounts only apply to hub-type keys.' });
+
+  const { hub_markup_bps, hub_settlement_account } = req.body || {};
+  if (hub_markup_bps !== undefined) record.hub_markup_bps = Number(hub_markup_bps) || 0;
+  if (hub_settlement_account !== undefined) record.hub_settlement_account = hub_settlement_account;
+
+  await saveState();
+  res.json({ client_id: record.client_id, hub_scope: record.hub_scope, hub_markup_bps: record.hub_markup_bps, hub_settlement_account: record.hub_settlement_account });
 });
 
 // GET /admin/keys — list every client, their type/scope, and their key (masked).
@@ -967,6 +1264,8 @@ app.get('/admin/keys', requireAdminKey, (req, res) => {
     client_id: r.client_id,
     type: r.type,
     hub_scope: r.hub_scope,
+    hub_markup_bps: r.hub_markup_bps || 0,
+    hub_settlement_account: r.hub_settlement_account || null,
     key_preview: key.slice(0, 12) + '…' + key.slice(-4)
   }));
   res.json({ count: list.length, results: list });
@@ -1040,6 +1339,47 @@ app.get('/admin/fincra/status', requireAdminKey, (req, res) => {
         ? 'VA issuance will work, but with no split — the full amount goes to the talent. Set FETCHTALOS_PLATFORM_ACCOUNT_* and FETCHTALOS_INSURANCE_POOL_ACCOUNT_* to enable fee/insurance skimming.'
         : 'Ready.'
   });
+});
+
+// GET /admin/felicity-ngn/status — is the NGN rail configured
+app.get('/admin/felicity-ngn/status', requireAdminKey, (req, res) => {
+  res.json({
+    configured: FELICITY_NGN_CONFIGURED,
+    platform_fee_bps: PLATFORM_FEE_BPS,
+    platform_account_configured: Boolean(PLATFORM_ACCOUNT),
+    hubs_with_markup: Object.values(KEYS).filter(k => k.type === 'hub' && (k.hub_markup_bps || 0) > 0).length,
+    note: !FELICITY_NGN_CONFIGURED
+      ? 'Not configured — set FELICITY_NGN_PARTNER_KEY, and ask Felicity to enable the "payments" and "insurance" capabilities on it (off by default, even for existing keys).'
+      : 'Configured. Mode (test/live) is determined by Felicity based on the key itself, not reported here.'
+  });
+});
+
+// POST /admin/felicity-ngn/retry-onboard/:contractId — retry a failed/
+// skipped NGN onboarding (e.g. after correcting a talent's NIN/BVN).
+app.post('/admin/felicity-ngn/retry-onboard/:contractId', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status !== 'active') return res.status(409).json({ error: 'contract_not_active' });
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (!talent) return res.status(404).json({ error: 'talent_not_found' });
+  const ngn = await onboardTalentNgn({ talent, contract });
+  Object.assign(contract, ngn);
+  await saveState();
+  res.json(contract);
+});
+
+// POST /admin/felicity-ngn/resettle/:contractId — manually re-trigger the
+// insurance-buy + fee/markup/salary split without waiting for a real
+// webhook. Mainly for demos and for recovering from a failed settlement
+// (e.g. hub_settlement_account_missing) after fixing the underlying issue.
+app.post('/admin/felicity-ngn/resettle/:contractId', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status !== 'active') return res.status(409).json({ error: 'contract_not_active' });
+  const settlement = await settleNgnPayment(contract);
+  Object.assign(contract, settlement);
+  await saveState();
+  res.json(contract);
 });
 
 // GET /admin/fincra/payout-status/:contractId — real ledger for this
@@ -1581,15 +1921,24 @@ async function finalizeContractAcceptance(contract) {
   if (engagement) engagement.status = 'contract_accepted';
 
   if (talent) {
-    const coverage = await purchaseCoverage({ talent, contract });
-    Object.assign(contract, coverage);
+    if (contract.employer_currency === 'NGN') {
+      // NGN-to-NGN — a fundamentally different rail. No coverage purchase
+      // here (that happens on FIRST PAYMENT, not at acceptance — see
+      // settleNgnPayment), no Fincra USD VA. Just the intermediate NUBAN.
+      const ngn = await onboardTalentNgn({ talent, contract });
+      Object.assign(contract, ngn);
+    } else {
+      const coverage = await purchaseCoverage({ talent, contract });
+      Object.assign(contract, coverage);
 
-    // Issue AFTER coverage so the split can correctly reimburse whatever
-    // was actually just purchased (or correctly omit that leg if it wasn't).
-    const salary = await issueSalaryAccount({ talent, contract });
-    Object.assign(contract, salary);
+      // Issue AFTER coverage so the split can correctly reimburse whatever
+      // was actually just purchased (or correctly omit that leg if it wasn't).
+      const salary = await issueSalaryAccount({ talent, contract });
+      Object.assign(contract, salary);
+    }
 
-    // W-8BEN — gracefully no-ops for non-US contracts (see taxFormMap).
+    // W-8BEN — gracefully no-ops for non-US contracts (see taxFormMap),
+    // which already correctly covers NGN-flow contracts (NG employer).
     const w8ben = await requestW8BenSignature({ talent, contract });
     Object.assign(contract, w8ben);
   }
@@ -1625,13 +1974,18 @@ async function sendWelcomeEmail(contract, talent) {
     : contract.salary_status && contract.salary_status !== 'not_yet_purchased'
       ? `<li><b>Salary account:</b> ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}</li>`
       : '';
+  const ngnLine = contract.ngn_status === 'onboarded'
+    ? `<li><b>NGN payment account:</b> ${contract.ngn_account_number} — ${contract.ngn_bank_name} (this is a pass-through account — your actual salary lands in your own bank account each pay period)</li>`
+    : contract.ngn_status && contract.ngn_status !== 'not_yet_purchased'
+      ? `<li><b>NGN payment account:</b> ${contract.ngn_status}${contract.ngn_note ? ' — ' + contract.ngn_note : ''}</li>`
+      : '';
 
   return sendEmail({
     to: talent.email,
     subject: `Welcome aboard, ${contract.talent_name} — your account details`,
     html: `<p>Hi ${contract.talent_name},</p>
       <p>Your contract with ${contract.employer_name} is now active. Here's what's set up for you:</p>
-      <ul>${coverageLine}${salaryLine}</ul>
+      <ul>${coverageLine}${salaryLine}${ngnLine}</ul>
       <p>Keep this email — it's your record of both.</p>
       <p>— FetchTalos</p>`
   });
@@ -1648,7 +2002,12 @@ function acceptedConfirmationHtml(contract) {
     : contract.salary_status === 'not_yet_purchased' || !contract.salary_status ? ''
     : `<span style="color:#b91c1c;">Salary account status: ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}. This needs attention before payroll can run for real.</span>`;
 
-  return `<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. ${coverageLine}</p><p>${salaryLine}</p>`;
+  const ngnLine = contract.ngn_status === 'onboarded'
+    ? `NGN payment account ready: ${contract.ngn_account_number || ''} (${contract.ngn_bank_name || ''}).`
+    : !contract.ngn_status ? ''
+    : `<span style="color:#b91c1c;">NGN account status: ${contract.ngn_status}${contract.ngn_note ? ' — ' + contract.ngn_note : ''}. This needs attention before payroll can run for real.</span>`;
+
+  return `<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. ${coverageLine}</p><p>${salaryLine}${ngnLine}</p>`;
 }
 
 // GET — talent clicks the link from their contract email. If MyCover needs
@@ -1663,14 +2022,22 @@ app.get('/v1/contracts/:id/accept', async (req, res) => {
   }
 
   const talent = db.talents.find(t => t.talent_id === contract.talent_id);
-  const missingCoverage = talent ? await getMissingCoverageFields(talent, contract) : [];
-  const missingSalary = talent ? fincraMissingFormFields(talent) : [];
+  const isNgnFlow = contract.employer_currency === 'NGN';
+
+  // NGN-flow contracts don't purchase coverage at acceptance time (that
+  // happens on first payment — see settleNgnPayment), so there's no point
+  // asking for the OLD MyCover proxy's required fields here. They DO still
+  // need rubies_account_* (that's where their real salary eventually lands)
+  // plus nin specifically, which nothing else in the system asks for.
+  const missingCoverage = (talent && !isNgnFlow) ? await getMissingCoverageFields(talent, contract) : [];
+  const missingSalary = (talent && !isNgnFlow) ? fincraMissingFormFields(talent) : [];
+  const missingNgn = (talent && isNgnFlow) ? ngnMissingFormFields(talent) : [];
   // Dedup by underlying talent PROPERTY, not raw field name — MyCover and
   // Fincra sometimes use different names for the same thing (customer_phone
   // vs phone), and showing two inputs for the same actual field is confusing.
   const seenProps = new Set();
   const missing = [];
-  for (const field of [...missingCoverage, ...missingSalary]) {
+  for (const field of [...missingCoverage, ...missingSalary, ...missingNgn]) {
     const prop = REQUIRED_FIELD_TO_TALENT_PROP[field] || field;
     if (seenProps.has(prop)) continue;
     seenProps.add(prop);
@@ -2040,6 +2407,40 @@ function handleFincraWebhookEvent(event, body) {
   return { matched: true, contract, new_status: contract.salary_status };
 }
 
+/**
+ * The NGN rail's webhook family — talent.onboarded, talent.va_credited,
+ * talent.transfer_completed/failed, talent.policy_issued/failed. The
+ * important one is talent.va_credited: that's what actually triggers the
+ * automatic insurance-buy + fee/markup/salary split, via settleNgnPayment.
+ * Async, unlike the other two handlers, since that orchestration makes
+ * real outbound calls (get_talent, buy_insurance, send) — not just a
+ * local status flip.
+ */
+async function handleFelicityNgnWebhookEvent(event, body) {
+  const talentRef = body.talent_ref || body.data?.talent_ref;
+  const contract = talentRef ? db.contracts.get(talentRef) : null;
+  if (!contract) return { matched: false };
+
+  if (event === 'talent.onboarded') {
+    contract.ngn_status = 'onboarded';
+  } else if (event === 'talent.va_credited') {
+    const settlement = await settleNgnPayment(contract);
+    Object.assign(contract, settlement);
+  } else if (event === 'talent.transfer_completed') {
+    contract.ngn_last_transfer_status = 'completed';
+  } else if (event === 'talent.transfer_failed') {
+    contract.ngn_last_transfer_status = 'failed';
+    contract.ngn_note = body.reason || contract.ngn_note;
+  } else if (event === 'talent.policy_issued') {
+    contract.coverage_status = 'active';
+  } else if (event === 'talent.policy_failed') {
+    contract.coverage_status = 'purchase_failed';
+    contract.coverage_note = body.reason || contract.coverage_note;
+  }
+
+  return { matched: true, contract, new_status: contract.ngn_status };
+}
+
 /* ---------------------------------------------------------------------- *
  * POST /webhooks/felicity — PUBLIC, and the ONLY webhook URL you register
  * with Felicity. Their partner dashboard has exactly one webhook_url field
@@ -2070,9 +2471,14 @@ app.post(['/webhooks/felicity', '/webhooks/mycover', '/webhooks/felicity-fincra'
   const body = req.body || {};
 
   // Dispatch by event name — Fincra events all start with usd_va./fx./ngn.,
-  // MyCover events start with purchase./policy./commission.
+  // MyCover events start with purchase./policy./commission., the NGN rail's
+  // own events start with talent. (distinct from Fincra's ngn.* events,
+  // which are about a USD-split settling, not this rail's own balance).
   const isFincraEvent = /^(usd_va|fx|ngn)\./.test(event);
-  const result = isFincraEvent ? handleFincraWebhookEvent(event, body) : handleMycoverWebhookEvent(event, body);
+  const isNgnTalentEvent = /^talent\./.test(event);
+  const result = isNgnTalentEvent
+    ? await handleFelicityNgnWebhookEvent(event, body)
+    : (isFincraEvent ? handleFincraWebhookEvent(event, body) : handleMycoverWebhookEvent(event, body));
 
   if (!result.matched) {
     console.warn(`[felicity webhook] event "${event}" didn't match any contract`);
