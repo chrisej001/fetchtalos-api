@@ -323,6 +323,19 @@ const COVERAGE_PRODUCT_IDS = {
   remote_contractor_family: process.env.MYCOVER_PRODUCT_ID_FAMILY || null,
 };
 
+// Required by buy_insurance on the NGN rail (§4 of the doc) — the specific
+// benefit line items a product covers, matched against what that product
+// actually offers. Confirmed ONLY for the basic plan, via its own real
+// product_description ("Covers primary care and telemedicine") cross-
+// checked against the doc's own worked sandbox example. Deliberately NOT
+// copied onto plus/family — those are different, unverified products, and
+// guessing the same two values for them risks a confusing wrong-benefit
+// rejection instead of the honest "this needs its own real check" signal
+// an unmapped plan correctly produces.
+const COVERAGE_PRODUCT_BENEFITS = {
+  remote_contractor_basic: ['Primary Care', 'Telemedicine'],
+};
+
 // MyCover doesn't always return a clean `status` field — this mirrors the
 // exact "treat as active" logic from the integration doc.
 function isPolicyActive(policyData) {
@@ -851,6 +864,16 @@ async function buyInsuranceNgn({ talent, contract }) {
   const product_id = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
   if (!product_id) return { coverage_status: 'gap_not_configured', coverage_note: `No product_id mapped for plan "${contract.coverage_plan}"` };
 
+  const benefits = COVERAGE_PRODUCT_BENEFITS[contract.coverage_plan];
+  if (!benefits) {
+    // Don't attempt a purchase we already know is missing a required
+    // field — that would just reproduce the same confusing 400 for a
+    // plan we already know isn't mapped yet, instead of a clear signal
+    // that THIS plan specifically needs its benefits confirmed first
+    // (see COVERAGE_PRODUCT_BENEFITS above).
+    return { coverage_status: 'gap_not_configured', coverage_note: `No confirmed benefits list for plan "${contract.coverage_plan}" — check GET /admin/felicity-ngn/products?plan=${contract.coverage_plan} and add it to COVERAGE_PRODUCT_BENEFITS.` };
+  }
+
   try {
     const [firstName, ...rest] = talent.name.split(' ');
     const payload = {
@@ -864,13 +887,7 @@ async function buyInsuranceNgn({ talent, contract }) {
       customer_nin: talent.nin,
       gender: talent.gender,
       address: talent.address,
-      // NOT sent: `benefits` — the doc describes this as an array matched
-      // against the SPECIFIC product's own benefit line items, which
-      // varies per product. Unlike gender/address (fixed talent
-      // attributes with one obviously correct value), there's no safe
-      // default here without knowing that product's actual benefit
-      // categories. If a future error names this as missing too, that's
-      // the next real gap to close — not something to guess at now.
+      benefits,
     };
     const result = await felicityNgn('buy_insurance', payload);
     return {
