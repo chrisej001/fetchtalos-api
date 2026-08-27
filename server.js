@@ -719,7 +719,15 @@ function settleOldestUnpaidPeriod(contractId) {
  * Used when a contract's employer_currency is NGN; the existing Fincra/
  * W-8BEN paths are untouched and still handle everything else.
  * ---------------------------------------------------------------------- */
-const FELICITY_NGN_API_KEY = process.env.FELICITY_NGN_PARTNER_KEY;
+// Felicity confirmed directly (authenticatePartner() in their own code):
+// the bearer token is checked against a single partner_api_clients table
+// with ZERO scoping by endpoint — same key, same row, works for the old
+// mycover-proxy-* family, the Fincra proxy, AND this NGN partner-api.
+// No separate key needs to exist. FELICITY_NGN_PARTNER_KEY is only here
+// as an explicit override in case Felicity ever DOES split these apart in
+// the future — until then, this automatically reuses whichever of your
+// existing Felicity keys is already set on Render. Nothing new to add.
+const FELICITY_NGN_API_KEY = process.env.FELICITY_NGN_PARTNER_KEY || process.env.FELICITY_FINCRA_KEY || process.env.FELICITY_PARTNER_KEY;
 const FELICITY_NGN_CONFIGURED = Boolean(FELICITY_NGN_API_KEY);
 const FELICITY_NGN_BASE = 'https://jtotljjdyhxjbbsnpuml.supabase.co/functions/v1/partner-api';
 
@@ -776,7 +784,7 @@ function ngnMissingFormFields(talent) {
  */
 async function onboardTalentNgn({ talent, contract }) {
   if (!FELICITY_NGN_CONFIGURED) {
-    return { ngn_status: 'gap_not_wired', ngn_note: 'FELICITY_NGN_PARTNER_KEY not set' };
+    return { ngn_status: 'gap_not_wired', ngn_note: 'No Felicity key found (checked FELICITY_NGN_PARTNER_KEY, FELICITY_FINCRA_KEY, FELICITY_PARTNER_KEY) — set at least one.' };
   }
   const missing = ngnMissingFormFields(talent);
   if (missing.length) {
@@ -1390,7 +1398,7 @@ app.get('/admin/felicity-ngn/status', requireAdminKey, (req, res) => {
     platform_account_configured: Boolean(PLATFORM_ACCOUNT),
     hubs_with_markup: Object.values(KEYS).filter(k => k.type === 'hub' && (k.hub_markup_bps || 0) > 0).length,
     note: !FELICITY_NGN_CONFIGURED
-      ? 'Not configured — set FELICITY_NGN_PARTNER_KEY, and ask Felicity to enable the "payments" and "insurance" capabilities on it (off by default, even for existing keys).'
+      ? 'Not configured — no key found (checks FELICITY_NGN_PARTNER_KEY, then falls back to your existing FELICITY_FINCRA_KEY/FELICITY_PARTNER_KEY, which likely already covers this). Ask Felicity to enable the "payments" and "insurance" capabilities on it (off by default, even for existing keys).'
       : 'Configured. Mode (test/live) is determined by Felicity based on the key itself, not reported here.'
   });
 });
