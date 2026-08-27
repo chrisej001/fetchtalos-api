@@ -188,6 +188,13 @@
         <table><thead><tr><th>Contract</th><th>Talent</th><th>Onboarding</th><th>Insurance</th><th>Last settlement</th><th>Actions</th></tr></thead>
         <tbody id="ngnContractsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
+
+      <div class="panel-head" style="margin-top:34px;"><h2>Webhook activity (last 50)</h2><p class="sub">GET /admin/webhook-log &mdash; every delivery attempt to /webhooks/felicity, including signature failures. Check this FIRST if a simulated deposit seems to do nothing.</p></div>
+      <button class="row-btn" id="refreshWebhookLogBtn" style="margin-bottom:14px;">↻ Refresh</button>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>When</th><th>Event</th><th>Signature</th><th>Matched?</th><th>Talent ref</th></tr></thead>
+        <tbody id="webhookLogTableBody"><tr><td colspan="5" class="empty-state">// connect to load</td></tr></tbody></table>
+      </div>
     </section>
   </main>
 </div>
@@ -224,7 +231,7 @@ document.getElementById('connectBtn').onclick = async ()=>{
     document.getElementById('connDot').className = 'conn-dot ok';
     document.getElementById('connLabel').textContent = 'connected';
     showToast('Connected');
-    loadOverview(); loadKeys(); loadTalents(); loadNgnStatus(); loadNgnContracts();
+    loadOverview(); loadKeys(); loadTalents(); loadNgnStatus(); loadNgnContracts(); loadWebhookLog();
   }catch(err){
     connected = false;
     document.getElementById('connDot').className = 'conn-dot bad';
@@ -420,6 +427,7 @@ async function loadNgnContracts(){
         <td>${insurance}</td>
         <td>${settlement}</td>
         <td>
+          <button class="btn-primary" style="margin:2px;padding:5px 11px;font-size:11.5px;" onclick="ngnSimulateDeposit('${c.contract_id}', ${c.proposed_amount||0})">Simulate deposit</button><br>
           <button class="row-btn" style="margin:2px;" onclick="ngnAction('retry-onboard','${c.contract_id}')">Retry onboard</button>
           <button class="row-btn" style="margin:2px;" onclick="ngnAction('resettle','${c.contract_id}')">Resettle</button>
           <button class="row-btn" style="margin:2px;" onclick="ngnAction('check-policy','${c.contract_id}')">Check policy doc</button>
@@ -430,12 +438,47 @@ async function loadNgnContracts(){
 }
 document.getElementById('refreshNgnContractsBtn').onclick = loadNgnContracts;
 
+async function loadWebhookLog(){
+  if(!connected) return;
+  try{
+    const data = await api('/admin/webhook-log');
+    const tbody = document.getElementById('webhookLogTableBody');
+    tbody.innerHTML = data.results.length ? data.results.map(w=>`
+      <tr>
+        <td class="mono" style="font-size:11px;">${new Date(w.at).toLocaleString()}</td>
+        <td class="mono" style="font-size:11px;">${w.event}</td>
+        <td>${w.signature_valid ? '<span style="color:var(--teal);">valid</span>' : '<span style="color:var(--red);">INVALID — check FELICITY_WEBHOOK_SECRET</span>'}</td>
+        <td>${w.matched ? '<span style="color:var(--teal);">yes → '+w.contract_id+'</span>' : '<span style="color:var(--red);">no</span>'}</td>
+        <td class="mono" style="font-size:11px;color:var(--text-faint);">${w.talent_ref||'—'}</td>
+      </tr>`).join('')
+      : `<tr><td colspan="5" class="empty-state">// nothing has arrived at /webhooks/felicity yet — if you just clicked "Simulate deposit" and see nothing here after a few seconds, the issue is on Felicity's delivery side, not this server</td></tr>`;
+  }catch(err){ showToast('Failed to load webhook log: ' + err.message, true); }
+}
+document.getElementById('refreshWebhookLogBtn').onclick = loadWebhookLog;
+
 window.ngnAction = async function(action, contractId){
   try{
     const result = await api(`/admin/felicity-ngn/${action}/${contractId}`, { method:'POST' });
     showToast(action + ' done: ' + (result.ngn_status || result.ngn_settlement_status || (result.document_just_arrived ? 'document arrived!' : 'checked')));
     loadNgnContracts();
   }catch(err){ showToast(action + ' failed: ' + err.message, true); }
+};
+
+// The real demo tool. Unlike the other three actions (which call our own
+// logic directly), this calls Felicity's REAL simulate_funding action —
+// it triggers their actual webhook back to us asynchronously. So the
+// result of THIS call never shows the final settlement — refresh a few
+// seconds later to see it land.
+window.ngnSimulateDeposit = async function(contractId, defaultAmount){
+  const amountStr = prompt('Amount to simulate depositing (₦), test mode only:', defaultAmount || 300000);
+  if(!amountStr) return;
+  const amount_naira = parseFloat(amountStr);
+  if(isNaN(amount_naira) || amount_naira <= 0){ showToast('Enter a valid amount', true); return; }
+  try{
+    await api(`/admin/felicity-ngn/simulate-deposit/${contractId}`, { method:'POST', body: JSON.stringify({ amount_naira }) });
+    showToast('Deposit simulated — Felicity is delivering the real webhook now, refresh in a few seconds');
+    setTimeout(loadNgnContracts, 4000);
+  }catch(err){ showToast('Simulate deposit failed: ' + err.message, true); }
 };
 </script>
 

@@ -2625,6 +2625,14 @@ async function handleFelicityNgnWebhookEvent(event, body) {
   const contract = talentRef ? db.contracts.get(talentRef) : null;
   if (!contract) return { matched: false };
 
+  // Same visibility the Fincra flow already had (salary_events) — every
+  // webhook that arrives and matches gets logged here, whether or not
+  // whatever it triggered actually succeeded. Without this, "did a
+  // webhook ever arrive for this contract" was previously unanswerable
+  // from the console — you'd have to ask me to guess from server logs.
+  contract.ngn_events = contract.ngn_events || [];
+  contract.ngn_events.push({ event, at: new Date().toISOString() });
+
   if (event === 'talent.onboarded') {
     contract.ngn_status = 'onboarded';
   } else if (event === 'talent.va_credited') {
@@ -2686,12 +2694,28 @@ async function handleFelicityNgnWebhookEvent(event, body) {
  * harmless to keep, since only one URL will ever actually be hit in
  * practice given Felicity's one-URL-per-partner model.
  * ---------------------------------------------------------------------- */
+// A lightweight, in-memory ring buffer of the last 50 webhook delivery
+// attempts — including ones that FAILED signature verification, which
+// would otherwise be completely invisible (a bad/mismatched
+// FELICITY_WEBHOOK_SECRET produces a 401 with nothing else to look at).
+// This is the direct answer to "did anything even arrive" without
+// needing to dig through Render's own logs.
+const WEBHOOK_LOG = [];
+function logWebhookAttempt(entry) {
+  WEBHOOK_LOG.unshift({ at: new Date().toISOString(), ...entry });
+  if (WEBHOOK_LOG.length > 50) WEBHOOK_LOG.length = 50;
+}
+
 app.post(['/webhooks/felicity', '/webhooks/mycover', '/webhooks/felicity-fincra'], async (req, res) => {
   const secret = process.env.FELICITY_WEBHOOK_SECRET || process.env.FINCRA_WEBHOOK_SECRET || process.env.MYCOVER_WEBHOOK_SECRET;
   if (!secret) return res.status(503).json({ error: 'webhook_not_configured', message: 'Set FELICITY_WEBHOOK_SECRET to enable this endpoint.' });
 
+  const eventHeader = req.headers['x-felicity-event'] || req.body?.event || '(unknown)';
   const valid = verifyFelicitySignature(req.rawBody, req.headers['x-felicity-signature'], secret);
-  if (!valid) return res.status(401).json({ error: 'invalid_signature' });
+  if (!valid) {
+    logWebhookAttempt({ event: eventHeader, signature_valid: false, matched: false });
+    return res.status(401).json({ error: 'invalid_signature' });
+  }
 
   const event = req.headers['x-felicity-event'] || req.body?.event || '';
   const body = req.body || {};
@@ -2706,6 +2730,8 @@ app.post(['/webhooks/felicity', '/webhooks/mycover', '/webhooks/felicity-fincra'
     ? await handleFelicityNgnWebhookEvent(event, body)
     : (isFincraEvent ? handleFincraWebhookEvent(event, body) : handleMycoverWebhookEvent(event, body));
 
+  logWebhookAttempt({ event, signature_valid: true, matched: result.matched, contract_id: result.contract?.contract_id || null, talent_ref: body.talent_ref || body.data?.talent_ref || null });
+
   if (!result.matched) {
     console.warn(`[felicity webhook] event "${event}" didn't match any contract`);
     return res.status(200).json({ received: true, matched: false }); // 200 so Felicity doesn't retry forever on an event we'll never match
@@ -2713,6 +2739,14 @@ app.post(['/webhooks/felicity', '/webhooks/mycover', '/webhooks/felicity-fincra'
 
   await saveState();
   res.status(200).json({ received: true, matched: true, contract_id: result.contract.contract_id, new_status: result.new_status });
+});
+
+// GET /admin/webhook-log — the last 50 delivery attempts to /webhooks/felicity,
+// across ALL event families, including ones that failed signature
+// verification. This is the direct diagnostic for "did anything even
+// arrive" — check this BEFORE assuming a real bug in the settlement logic.
+app.get('/admin/webhook-log', requireAdminKey, (req, res) => {
+  res.json({ count: WEBHOOK_LOG.length, results: WEBHOOK_LOG });
 });
 
 /* ---------------------------------------------------------------------- *
