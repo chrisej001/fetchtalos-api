@@ -1262,6 +1262,123 @@ app.get('/v1/talents/discover', (req, res) => {
 });
 
 /* ---------------------------------------------------------------------- *
+ * HUB TALENT MANAGEMENT — self-service upload/read/edit of a hub's OWN
+ * roster. Before this, only the admin key could add talent (one at a
+ * time, via /admin/talents) — no hub could sync their own alumni database
+ * without asking Chris to do it manually. These three endpoints are
+ * hub-key-only (rejected outright for enterprise keys, which have no
+ * "own roster" to speak of) and every write is silently forced into the
+ * caller's own hub_scope — a hub can never read, create, or touch a
+ * talent outside its own pipeline, no matter what the request body says.
+ * ---------------------------------------------------------------------- */
+
+// GET /v1/talents/roster — a hub's own full roster, every status, not just
+// "available" — distinct from /discover, which is the enterprise-facing
+// "who can I hire right now" view. This is the hub-facing "everyone I've
+// ever uploaded" view.
+app.get('/v1/talents/roster', (req, res) => {
+  if (req.clientType !== 'hub') {
+    return res.status(403).json({ error: 'hub_only', message: 'This endpoint returns your own hub roster — use /v1/talents/discover to browse the full pool instead.' });
+  }
+  const results = db.talents.filter(t => t.pipeline === req.hubScope);
+  res.json({ count: results.length, results });
+});
+
+// POST /v1/talents/upload — bulk create/update. Body: { "talents": [ {...}, {...} ] }.
+// Dedup key is EMAIL, scoped to the hub's own pipeline:
+//   - email already exists in THIS hub's pipeline  -> update in place
+//   - email already exists in a DIFFERENT hub's pipeline -> rejected as a
+//     conflict for that one item, nothing overwritten
+//   - email not seen before -> created, pipeline forced to this hub's scope
+// Every item is processed independently and reported independently — one
+// bad row in a 40-talent sync doesn't fail the other 39.
+app.post('/v1/talents/upload', async (req, res) => {
+  if (req.clientType !== 'hub') {
+    return res.status(403).json({ error: 'hub_only', message: 'This endpoint is for hub-type keys only — each hub manages its own talent roster.' });
+  }
+
+  const items = Array.isArray(req.body?.talents) ? req.body.talents : null;
+  if (!items || !items.length) {
+    return res.status(400).json({ error: 'talents_array_required', message: 'Body must be { "talents": [ {...}, {...} ] } — at least one talent.' });
+  }
+
+  const results = items.map((item, index) => {
+    const { name, email, stack, country, vetted_score } = item || {};
+    if (!name || !email || !country) {
+      return { index, error: 'missing_required_field', message: 'name, email, and country are required', input: item };
+    }
+
+    const existingSameHub = db.talents.find(t => t.email === email && t.pipeline === req.hubScope);
+    const existingOtherHub = db.talents.find(t => t.email === email && t.pipeline !== req.hubScope);
+
+    if (existingOtherHub) {
+      return { index, error: 'email_conflict', message: `A talent with this email already exists under a different pipeline (${existingOtherHub.pipeline}) — not overwritten.`, email };
+    }
+
+    if (existingSameHub) {
+      // UPDATE — status is deliberately NOT touched by a re-sync. It's a
+      // lifecycle field this system manages (available/engaged/...), not
+      // something a hub's own database necessarily tracks the same way.
+      existingSameHub.name = name;
+      if (Array.isArray(stack)) existingSameHub.stack = stack;
+      existingSameHub.country = country;
+      if (vetted_score !== undefined) existingSameHub.vetted_score = Number(vetted_score) || existingSameHub.vetted_score;
+      return { index, action: 'updated', talent: existingSameHub };
+    }
+
+    // CREATE — pipeline is ALWAYS the caller's own hub_scope, never taken
+    // from the request body. This is what makes it structurally impossible
+    // for one hub to inject talent into another hub's pipeline.
+    const talent = {
+      talent_id: id('tal'),
+      name,
+      email,
+      stack: Array.isArray(stack) ? stack : [],
+      pipeline: req.hubScope,
+      country,
+      vetted_score: Number(vetted_score) || 75,
+      status: 'available',
+    };
+    db.talents.push(talent);
+    return { index, action: 'created', talent };
+  });
+
+  await saveState();
+
+  res.status(201).json({
+    count: results.length,
+    created: results.filter(r => r.action === 'created').length,
+    updated: results.filter(r => r.action === 'updated').length,
+    failed: results.filter(r => r.error).length,
+    results,
+  });
+});
+
+// PATCH /v1/talents/:id — edit ONE talent already in the caller's own
+// roster (fix a typo, update a stack/skill). Same hub-only + own-pipeline
+// restriction as upload. Pipeline and status are not editable here, for
+// the same reasons as above.
+app.patch('/v1/talents/:id', async (req, res) => {
+  if (req.clientType !== 'hub') {
+    return res.status(403).json({ error: 'hub_only', message: 'This endpoint is for hub-type keys only.' });
+  }
+  const talent = db.talents.find(t => t.talent_id === req.params.id && t.pipeline === req.hubScope);
+  // Deliberately the SAME error for "doesn't exist" and "exists but isn't
+  // yours" — a hub shouldn't be able to probe whether a given talent_id
+  // belongs to some other hub by watching which error code comes back.
+  if (!talent) return res.status(404).json({ error: 'talent_not_found' });
+
+  const { name, stack, country, vetted_score } = req.body || {};
+  if (name !== undefined) talent.name = name;
+  if (Array.isArray(stack)) talent.stack = stack;
+  if (country !== undefined) talent.country = country;
+  if (vetted_score !== undefined) talent.vetted_score = Number(vetted_score) || talent.vetted_score;
+
+  await saveState();
+  res.json(talent);
+});
+
+/* ---------------------------------------------------------------------- *
  * THE HIRING FLOW — this is the real sequence, not one instant API call:
  *
  * 1. POST /v1/engagements/create  — enterprise clicks "Engage". Sends the
