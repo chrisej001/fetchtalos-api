@@ -901,6 +901,12 @@ async function getPolicyNgn(policy_reference) {
   return felicityNgn('get_policy', { policy_reference });
 }
 
+/** Real catalog pass-through — this is how we find out what benefit line
+ * items a specific product actually has, rather than guessing. */
+async function listInsuranceProductsNgn() {
+  return felicityNgn('list_insurance_products');
+}
+
 /**
  * Fired specifically when the policy DOCUMENT becomes available — not the
  * same moment as "insurance purchased." Per the doc, policy_document_url
@@ -1441,6 +1447,28 @@ app.get('/admin/felicity-ngn/status', requireAdminKey, (req, res) => {
       ? 'Not configured — no key found (checks FELICITY_NGN_PARTNER_KEY, then falls back to your existing FELICITY_FINCRA_KEY/FELICITY_PARTNER_KEY, which likely already covers this). Ask Felicity to enable the "payments" and "insurance" capabilities on it (off by default, even for existing keys).'
       : 'Configured. Mode (test/live) is determined by Felicity based on the key itself, not reported here.'
   });
+});
+
+// GET /admin/felicity-ngn/products — the REAL live catalog, unmodified.
+// Add ?plan=remote_contractor_basic to filter down to just the one
+// product currently mapped to that plan (via COVERAGE_PRODUCT_IDS) —
+// that's the targeted query for "what does THIS product actually need,"
+// e.g. the exact valid benefit line item names, rather than guessing.
+app.get('/admin/felicity-ngn/products', requireAdminKey, async (req, res) => {
+  if (!FELICITY_NGN_CONFIGURED) return res.status(422).json({ error: 'felicity_ngn_not_configured' });
+  try {
+    const result = await listInsuranceProductsNgn();
+    let products = result.products || result.data || result;
+    if (req.query.plan) {
+      const productId = COVERAGE_PRODUCT_IDS[req.query.plan];
+      if (!productId) return res.status(400).json({ error: 'unknown_plan', message: `"${req.query.plan}" isn't in COVERAGE_PRODUCT_IDS` });
+      const match = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
+      return res.json({ plan: req.query.plan, product_id: productId, product: match || null, note: match ? undefined : 'Product ID not found in the returned catalog — check COVERAGE_PRODUCT_IDS against a live product_id.' });
+    }
+    res.json({ count: Array.isArray(products) ? products.length : undefined, products });
+  } catch (err) {
+    res.status(502).json({ error: 'list_products_failed', message: err.message });
+  }
 });
 
 // POST /admin/felicity-ngn/retry-onboard/:contractId — retry a failed/
