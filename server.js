@@ -740,7 +740,15 @@ async function felicityNgn(action, payload = {}) {
   const text = await res.text();
   const json = text ? JSON.parse(text) : null;
   if (!res.ok) {
-    const err = new Error(json?.error || json?.message || `felicity_ngn_${res.status}`);
+    // The doc is explicit that the USEFUL part of a validation failure is
+    // in `message` (e.g. "gender is missing in body"), not the generic
+    // `error` code (e.g. "insurance_purchase_failed") — a real bug here
+    // previously surfaced only the code, hiding exactly what needed
+    // fixing. `message` can be an array per the doc's own example, so
+    // that's handled here too, not assumed to always be a string.
+    const detail = Array.isArray(json?.message) ? json.message.join('; ') : json?.message;
+    const combined = json?.error && detail ? `${json.error}: ${detail}` : (detail || json?.error || `felicity_ngn_${res.status}`);
+    const err = new Error(combined);
     err.status = res.status;
     err.body = json;
     throw err;
