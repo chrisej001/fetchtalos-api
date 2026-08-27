@@ -167,8 +167,8 @@
       <div class="panel-head"><h2>Contracts</h2><p class="sub">GET /v1/contracts &mdash; wire instructions column shows the REAL salary account, once issued</p></div>
       <button class="row-btn" id="refreshContractsBtn" style="margin-bottom:14px;">Refresh</button>
       <div class="tbl-wrap">
-        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th>Salary account (wire here)</th><th>W-8BEN</th></tr></thead>
-        <tbody id="contractsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
+        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th>Salary account / NGN account</th><th>Insurance / policy</th><th>W-8BEN</th></tr></thead>
+        <tbody id="contractsTableBody"><tr><td colspan="7" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
 
@@ -233,7 +233,7 @@
       <select id="employerCountrySelect"><option value="US">United States</option><option value="UK">United Kingdom</option><option value="DE">Germany</option><option value="CA">Canada</option></select>
     </div>
     <div class="field"><label>Employer pays in</label>
-      <select id="employerCurrencySelect"><option value="USD">USD</option><option value="GBP">GBP</option><option value="EUR">EUR</option><option value="CAD">CAD</option></select>
+      <select id="employerCurrencySelect"><option value="USD">USD</option><option value="GBP">GBP</option><option value="EUR">EUR</option><option value="CAD">CAD</option><option value="NGN">NGN (domestic — different rail entirely, see console notes)</option></select>
     </div>
     <div class="field"><label>Coverage plan</label>
       <select id="coveragePlanSelect"><option value="remote_contractor_basic">Basic</option><option value="remote_contractor_plus">Plus</option><option value="remote_contractor_family">Family</option></select>
@@ -425,8 +425,24 @@ function renderContracts(){
         lastCell = '<span class="mono" style="font-size:11px;">'+c.salary_va_account_number+'<br>'+c.salary_va_bank_name+' &middot; routing '+c.salary_va_routing_number+'</span>';
       } else if(c.salary_status && c.salary_status !== 'not_yet_purchased'){
         lastCell = '<span style="color:var(--red);font-size:11px;">'+c.salary_status+(c.salary_note ? ': '+c.salary_note : '')+'</span>';
+      } else if(c.ngn_status === 'onboarded'){
+        lastCell = '<span class="mono" style="font-size:11px;color:var(--purple);">'+c.ngn_account_number+'<br>'+c.ngn_bank_name+' (NGN pass-through — real payout is automatic)</span>';
+      } else if(c.ngn_status){
+        lastCell = '<span style="color:var(--red);font-size:11px;">'+c.ngn_status+(c.ngn_note ? ': '+c.ngn_note : '')+'</span>';
       } else {
         lastCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      }
+
+      var insuranceCell;
+      if(c.coverage_status === 'active'){
+        insuranceCell = '<span style="font-size:11px;color:var(--teal);">'+(c.coverage_policy_id||'')+'</span>'
+          + (c.coverage_policy_document_url
+            ? '<br><a href="'+c.coverage_policy_document_url+'" target="_blank" style="color:var(--amber);font-size:11px;">policy document</a>'
+            : (c.employer_currency==='NGN' ? '<br><span style="color:var(--text-faint);font-size:10px;">document pending (arrives async)</span>' : ''));
+      } else if(c.coverage_status && c.coverage_status !== 'not_yet_purchased'){
+        insuranceCell = '<span style="color:var(--red);font-size:11px;">'+c.coverage_status+(c.coverage_note ? ': '+c.coverage_note : '')+'</span>';
+      } else {
+        insuranceCell = '<span style="color:var(--text-faint);font-size:11px;">'+(c.employer_currency==='NGN' ? 'buys on first payment' : '-')+'</span>';
       }
 
       var w8benCell;
@@ -446,8 +462,9 @@ function renderContracts(){
         + '<td class="mono">'+(c.proposed_amount ? c.proposed_amount + ' ' + c.employer_currency : '-')+'</td>'
         + '<td><span class="status-pill status-'+c.status+'">'+c.status+'</span></td>'
         + '<td>'+lastCell+'</td>'
+        + '<td>'+insuranceCell+'</td>'
         + '<td>'+w8benCell+'</td></tr>';
-    }).join('') : '<tr><td colspan="6" class="empty-state">// no contracts yet - send one from Engagements</td></tr>';
+    }).join('') : '<tr><td colspan="7" class="empty-state">// no contracts yet - send one from Engagements</td></tr>';
   }).catch(function(err){ showToast('Failed to load contracts: ' + err.message, true); });
 }
 document.getElementById('refreshContractsBtn').onclick = renderContracts;

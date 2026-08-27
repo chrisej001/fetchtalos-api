@@ -1620,6 +1620,20 @@ app.get('/admin/overview', requireAdminKey, (req, res) => {
   res.json({ clients: byClient, total_clients: Object.keys(byClient).length });
 });
 
+// GET /admin/contracts — every contract, across every client, unfiltered
+// by ownership (unlike GET /v1/contracts, which is scoped to whichever
+// key made the request). This genuinely didn't exist before — admin had
+// no way to browse contracts at all, only per-client aggregate counts via
+// /admin/overview. Optional ?flow=ngn|usd to filter by which rail a
+// contract is on, useful when testing one flow specifically.
+app.get('/admin/contracts', requireAdminKey, (req, res) => {
+  let results = [...db.contracts.values()];
+  if (req.query.flow === 'ngn') results = results.filter(c => c.employer_currency === 'NGN');
+  if (req.query.flow === 'usd') results = results.filter(c => c.employer_currency && c.employer_currency !== 'NGN');
+  results.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  res.json({ count: results.length, results });
+});
+
 // GET /admin/pay-periods — every open/overdue pay period across EVERY
 // client, in one view. This is the real answer to "is anyone late on
 // payroll" — worth showing directly in a hub demo, since it's the kind of
