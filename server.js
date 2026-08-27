@@ -1463,6 +1463,30 @@ app.post('/admin/felicity-ngn/check-policy/:contractId', requireAdminKey, async 
   }
 });
 
+// POST /admin/felicity-ngn/buy-insurance-now/:contractId — a direct,
+// unconditional insurance purchase, bypassing settleNgnPayment's normal
+// "is this the first payment" check entirely. This exists specifically
+// for data correction: if a contract's pay period ever got marked paid
+// WITHOUT insurance actually being bought (e.g. by mistakenly running the
+// old USD payroll simulation against an NGN contract — see the guard in
+// disburseOneContract), the normal resettle path would see a paid period
+// already on record and skip insurance again, thinking it's not the first
+// payment anymore. This is the honest way out of that specific hole —
+// use it deliberately, not as a routine substitute for the real flow.
+app.post('/admin/felicity-ngn/buy-insurance-now/:contractId', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status !== 'active') return res.status(409).json({ error: 'contract_not_active' });
+  if (contract.coverage_status === 'active') return res.status(409).json({ error: 'already_has_active_coverage', message: 'This contract already shows active coverage — use check-policy to refresh the document, not this.' });
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+  if (!talent) return res.status(404).json({ error: 'talent_not_found' });
+
+  const coverage = await buyInsuranceNgn({ talent, contract });
+  Object.assign(contract, coverage);
+  await saveState();
+  res.json(contract);
+});
+
 // GET /admin/fincra/payout-status/:contractId — real ledger for this
 // contract's salary VA, straight from Felicity.
 app.get('/admin/fincra/payout-status/:contractId', requireAdminKey, async (req, res) => {
@@ -2281,6 +2305,16 @@ async function disburseOneContract(contract, req_clientId, idempotencyKey) {
   if (contract.client_id !== req_clientId) return { contract_id: contract.contract_id, error: 'contract_not_found' };
   if (contract.status !== 'active') {
     return { contract_id: contract.contract_id, error: 'contract_not_active', message: `Contract is "${contract.status}" — the talent must accept the contract before payroll can run.` };
+  }
+  if (contract.employer_currency === 'NGN') {
+    // This function is the OLD, purely-local USD/Fincra simulation — it
+    // never calls Felicity at all. Running it against an NGN-flow contract
+    // would silently mark a pay period "paid" and email the talent without
+    // any real money moving and without buying real insurance — exactly
+    // the bug this guard exists to prevent. Real NGN settlement only
+    // happens via the talent.va_credited webhook, or manually via
+    // POST /admin/felicity-ngn/resettle/:contractId.
+    return { contract_id: contract.contract_id, error: 'wrong_rail_for_ngn', message: 'This contract is on the NGN rail — it settles automatically when a real payment lands, or manually via POST /admin/felicity-ngn/resettle/:contractId. This endpoint (the USD/Fincra simulation) never touches the real NGN balance and cannot be used here.' };
   }
 
   if (idempotencyKey) {
