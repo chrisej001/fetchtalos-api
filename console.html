@@ -426,7 +426,8 @@ function renderContracts(){
       } else if(c.salary_status && c.salary_status !== 'not_yet_purchased'){
         lastCell = '<span style="color:var(--red);font-size:11px;">'+c.salary_status+(c.salary_note ? ': '+c.salary_note : '')+'</span>';
       } else if(c.ngn_status === 'onboarded'){
-        lastCell = '<span class="mono" style="font-size:11px;color:var(--purple);">'+c.ngn_account_number+'<br>'+c.ngn_bank_name+' (NGN pass-through — real payout is automatic)</span>';
+        lastCell = '<span class="mono" style="font-size:11px;color:var(--purple);">'+c.ngn_account_number+'<br>'+c.ngn_bank_name+' (NGN pass-through — real payout is automatic)</span>'
+          + '<br><button class="btn-teal" style="margin-top:4px;font-size:11px;padding:4px 9px;" onclick="simulateNgnDeposit(\''+c.contract_id+'\', '+(c.proposed_amount||0)+')">Simulate: we wired the money</button>';
       } else if(c.ngn_status){
         lastCell = '<span style="color:var(--red);font-size:11px;">'+c.ngn_status+(c.ngn_note ? ': '+c.ngn_note : '')+'</span>';
       } else {
@@ -540,6 +541,26 @@ function simulateContractAccept(contractId, token){
     showToast('Contract accepted (simulated as the talent) - now active');
     renderContracts(); renderTalent(); renderPayrollSelect();
   }).catch(function(err){ showToast('Failed: ' + err.message, true); });
+}
+
+// Plays the role of the ENTERPRISE actually wiring the money — this is
+// deliberately here in the console, not tucked into admin, since it
+// represents an action the enterprise itself takes, not something
+// FetchTalos does on their behalf. Triggers Felicity's REAL
+// simulate_funding, which fires their real webhook back to us
+// asynchronously — the result of this call never shows the final
+// settlement, so it refreshes the table a few seconds later to catch it.
+function simulateNgnDeposit(contractId, defaultAmount){
+  var amountStr = prompt('Amount to simulate wiring (₦), test mode only:', defaultAmount || 300000);
+  if(!amountStr) return;
+  var amount_naira = parseFloat(amountStr);
+  if(isNaN(amount_naira) || amount_naira <= 0){ showToast('Enter a valid amount', true); return; }
+  api('/v1/contracts/' + contractId + '/simulate-deposit', { method:'POST', body: JSON.stringify({ amount_naira: amount_naira }) })
+    .then(function(){
+      showToast('Wired — Felicity is delivering the real webhook now, refreshing shortly');
+      setTimeout(renderContracts, 4000);
+    })
+    .catch(function(err){ showToast('Simulate deposit failed: ' + err.message, true); });
 }
 
 /* PAYROLL - only ACTIVE contracts */

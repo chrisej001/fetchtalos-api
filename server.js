@@ -908,6 +908,20 @@ async function sendNgn({ talent_ref, amount_naira, account_number, bank_code, ac
 }
 
 /**
+ * Test-mode-only — credits a talent's NGN balance WITHOUT a real bank
+ * transfer, exactly as Felicity's own doc describes it: "same
+ * inbound_credit entry type, same talent.va_credited webhook" as a real
+ * deposit. This is THE way to actually exercise the full real settlement
+ * flow (buy insurance, split fee/markup, pay the talent) in a demo,
+ * without needing real money to move. A live key gets a real
+ * simulate_only_in_test_mode error back from Felicity — this function
+ * doesn't need to guard against that itself, the real API already does.
+ */
+async function simulateNgnFunding({ talent_ref, amount_naira }) {
+  return felicityNgn('simulate_funding', { talent_ref, amount_naira });
+}
+
+/**
  * The core automatic orchestration, fired every time a payment lands on a
  * talent's NGN balance (talent.va_credited webhook). In order:
  *   1. If this is the FIRST ever payment for this contract, buy insurance
@@ -1415,6 +1429,36 @@ app.post('/admin/felicity-ngn/retry-onboard/:contractId', requireAdminKey, async
   Object.assign(contract, ngn);
   await saveState();
   res.json(contract);
+});
+
+// POST /admin/felicity-ngn/simulate-deposit/:contractId — THE real demo
+// tool, test-mode only. Unlike resettle/buy-insurance-now (which call our
+// own internal logic directly, bypassing Felicity), this calls Felicity's
+// REAL simulate_funding action — it credits the talent's actual sandbox
+// balance and Felicity's own backend fires a REAL talent.va_credited
+// webhook back to us, exercising the entire real pipeline end to end
+// (their API, real webhook delivery, our signature verification, then
+// settleNgnPayment) — not a shortcut. Body: { "amount_naira": 300000 }
+// (defaults to the contract's own proposed_amount if omitted, which is
+// almost always what you want for a realistic demo).
+app.post('/admin/felicity-ngn/simulate-deposit/:contractId', requireAdminKey, async (req, res) => {
+  const contract = db.contracts.get(req.params.contractId);
+  if (!contract) return res.status(404).json({ error: 'contract_not_found' });
+  if (!contract.ngn_talent_ref) return res.status(409).json({ error: 'not_onboarded_yet', message: 'This talent has no NGN account yet — retry-onboard first.' });
+
+  const amount_naira = Number(req.body?.amount_naira) || Number(contract.proposed_amount) || 0;
+  if (!amount_naira) return res.status(400).json({ error: 'amount_naira_required' });
+
+  try {
+    const result = await simulateNgnFunding({ talent_ref: contract.ngn_talent_ref, amount_naira });
+    res.json({
+      simulated_naira: amount_naira,
+      felicity_response: result,
+      note: 'This triggers a REAL webhook from Felicity asynchronously — check the contract in a few seconds to see it settle (buy insurance if first payment, then send fee/markup/salary). It will not have settled yet in THIS response.',
+    });
+  } catch (err) {
+    res.status(502).json({ error: 'simulate_funding_failed', message: err.message });
+  }
 });
 
 // POST /admin/felicity-ngn/resettle/:contractId — manually re-trigger the
@@ -2262,6 +2306,37 @@ app.get('/v1/contracts/:id/pay-periods', (req, res) => {
     .sort((a, b) => a.period_number - b.period_number)
     .map(p => ({ ...p, status: payPeriodStatus(p) }));
   res.json({ count: periods.length, results: periods });
+});
+
+// POST /v1/contracts/:id/simulate-deposit — test-mode only. This
+// represents the ENTERPRISE'S OWN action (wiring the money), so it lives
+// under the client-scoped /v1 surface, not admin — an enterprise/hub
+// shouldn't need FetchTalos's own internal admin panel just to demo
+// paying their own talent. Same mechanism as the admin version
+// (/admin/felicity-ngn/simulate-deposit) — calls Felicity's REAL
+// simulate_funding action, which fires their real webhook back to us
+// asynchronously. A live key gets simulate_only_in_test_mode from
+// Felicity itself; this endpoint doesn't need its own separate guard for
+// that. Body: { "amount_naira": 300000 } (optional — defaults to the
+// contract's own proposed_amount).
+app.post('/v1/contracts/:id/simulate-deposit', async (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
+  if (!contract.ngn_talent_ref) return res.status(409).json({ error: 'not_onboarded_yet', message: 'This talent has no NGN account yet.' });
+
+  const amount_naira = Number(req.body?.amount_naira) || Number(contract.proposed_amount) || 0;
+  if (!amount_naira) return res.status(400).json({ error: 'amount_naira_required' });
+
+  try {
+    const result = await simulateNgnFunding({ talent_ref: contract.ngn_talent_ref, amount_naira });
+    res.json({
+      simulated_naira: amount_naira,
+      felicity_response: result,
+      note: 'This triggers a REAL webhook from Felicity asynchronously — the settlement (insurance, fee/markup split, salary) hasn\'t happened yet in this response. Check back in a few seconds.',
+    });
+  } catch (err) {
+    res.status(502).json({ error: 'simulate_funding_failed', message: err.message });
+  }
 });
 
 // GET /v1/contracts/:id/w8ben — downloads the REAL signed PDF from Dropbox
