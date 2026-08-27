@@ -92,15 +92,15 @@ const taxFormMap = { US: 'W-8BEN', UK: 'Self-Assessment (Overseas)', DE: 'Freist
 const coveragePlanCopy = {
   remote_contractor_basic: {
     label: 'Remote Contractor — Basic',
-    benefits: ['Health coverage via MyCover.ai (individual, basic tier)']
+    benefits: ['Health coverage via Felicity (individual, basic tier)']
   },
   remote_contractor_plus: {
     label: 'Remote Contractor — Plus',
-    benefits: ['Health coverage via MyCover.ai (individual, enhanced tier)', 'Priority claims processing']
+    benefits: ['Health coverage via Felicity (individual, enhanced tier)', 'Priority claims processing']
   },
   remote_contractor_family: {
     label: 'Remote Contractor — Family',
-    benefits: ['Health coverage via MyCover.ai (family tier — spouse + dependents)', 'Priority claims processing']
+    benefits: ['Health coverage via Felicity (family tier — spouse + dependents)', 'Priority claims processing']
   }
 };
 
@@ -1010,8 +1010,23 @@ async function settleNgnPayment(contract) {
   const isFirstPayment = alreadyPaidCount === 0;
 
   if (isFirstPayment) {
+    const hadDocumentBefore = Boolean(contract.coverage_policy_document_url);
     const coverage = await buyInsuranceNgn({ talent, contract });
     Object.assign(contract, coverage);
+
+    // This was the real gap: in test mode, Felicity returns
+    // policy_document_url synchronously inside buyInsuranceNgn's own
+    // response (per the doc — not via a genuinely separate async
+    // round-trip), so the SECOND talent.policy_issued webhook that would
+    // normally trigger sendPolicyDocumentEmail (via
+    // handleFelicityNgnWebhookEvent) may never fire again in test mode —
+    // there's nothing left pending to report. Without this check here,
+    // the talent's policy gets saved silently and they're never emailed
+    // about it. Same transition-detection pattern used everywhere else
+    // this exact class of bug has come up (buy-insurance-now, check-policy).
+    if (contract.coverage_policy_document_url && !hadDocumentBefore) {
+      await sendPolicyDocumentEmail(contract, talent);
+    }
   }
 
   let currentBalanceKobo;
@@ -2269,18 +2284,20 @@ async function sendWelcomeEmail(contract, talent) {
     : contract.salary_status && contract.salary_status !== 'not_yet_purchased'
       ? `<li><b>Salary account:</b> ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}</li>`
       : '';
-  const ngnLine = contract.ngn_status === 'onboarded'
-    ? `<li><b>NGN payment account:</b> ${contract.ngn_account_number} — ${contract.ngn_bank_name} (this is a pass-through account — your actual salary lands in your own bank account each pay period)</li>`
-    : contract.ngn_status && contract.ngn_status !== 'not_yet_purchased'
-      ? `<li><b>NGN payment account:</b> ${contract.ngn_status}${contract.ngn_note ? ' — ' + contract.ngn_note : ''}</li>`
-      : '';
+  // NGN-flow talents deliberately don't see the intermediate pass-through
+  // account at all here — it's internal plumbing, not something they need
+  // to act on or check. Their real, actionable destination is the bank
+  // account they themselves submitted at KYC, which is where their actual
+  // salary lands every pay period. Onboarding status is FetchTalos's own
+  // concern to monitor (see the admin console's NGN Rail tab), not the
+  // talent's.
 
   return sendEmail({
     to: talent.email,
     subject: `Welcome aboard, ${contract.talent_name} — your account details`,
     html: `<p>Hi ${contract.talent_name},</p>
       <p>Your contract with ${contract.employer_name} is now active. Here's what's set up for you:</p>
-      <ul>${coverageLine}${salaryLine}${ngnLine}</ul>
+      <ul>${coverageLine}${salaryLine}</ul>
       <p>Keep this email — it's your record of both.</p>
       <p>— FetchTalos</p>`
   });
@@ -2297,12 +2314,10 @@ function acceptedConfirmationHtml(contract) {
     : contract.salary_status === 'not_yet_purchased' || !contract.salary_status ? ''
     : `<span style="color:#b91c1c;">Salary account status: ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}. This needs attention before payroll can run for real.</span>`;
 
-  const ngnLine = contract.ngn_status === 'onboarded'
-    ? `NGN payment account ready: ${contract.ngn_account_number || ''} (${contract.ngn_bank_name || ''}).`
-    : !contract.ngn_status ? ''
-    : `<span style="color:#b91c1c;">NGN account status: ${contract.ngn_status}${contract.ngn_note ? ' — ' + contract.ngn_note : ''}. This needs attention before payroll can run for real.</span>`;
+  // Same reasoning as the welcome email above — no NGN pass-through
+  // account shown to the talent here either.
 
-  return `<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. ${coverageLine}</p><p>${salaryLine}${ngnLine}</p>`;
+  return `<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. ${coverageLine}</p><p>${salaryLine}</p>`;
 }
 
 // GET — talent clicks the link from their contract email. If MyCover needs
