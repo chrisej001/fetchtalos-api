@@ -162,10 +162,18 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
 
     <div class="card" style="margin-top:24px;">
       <h3 style="font-size:15px;">Estimate a total</h3>
-      <p style="font-size:12.5px; color:var(--text-muted); margin:6px 0 14px;">What an enterprise would actually owe — salary + FetchTalos's fee + your markup, plus insurance on the first payment only.</p>
+      <p style="font-size:12.5px; color:var(--text-muted); margin:6px 0 14px;">What an enterprise would actually owe — salary + FetchTalos's fee + your markup, plus insurance whenever it's due for renewal (which depends on the coverage duration chosen, not always just month one).</p>
       <div class="form-grid">
         <div class="field"><label>Monthly salary (₦)</label><input id="calcSalary" type="number" placeholder="e.g. 500000"></div>
         <div class="field"><label>Plan</label><select id="calcPlan"><option value="">Select a plan…</option></select></div>
+        <div class="field"><label>Coverage duration</label>
+          <select id="calcDuration">
+            <option value="1">1 month</option>
+            <option value="3">3 months</option>
+            <option value="6">6 months</option>
+            <option value="12" selected>12 months</option>
+          </select>
+        </div>
       </div>
       <button class="row-btn" id="calcBtn">Calculate</button>
       <div class="calc" id="calcResult" style="display:none;"></div>
@@ -182,6 +190,14 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
         <div class="field"><label>Employer / company name</label><input id="simEmployer" placeholder="e.g. Acme Corp" value="Acme Corp"></div>
         <div class="field"><label>Role title</label><input id="simRole" placeholder="e.g. Backend Engineer" value="Backend Engineer"></div>
         <div class="field"><label>Coverage plan</label><select id="simPlan"><option value="">Select a plan…</option></select></div>
+        <div class="field"><label>Coverage duration (renewal cycle)</label>
+          <select id="simDuration">
+            <option value="1">1 month — insurance renews every payment</option>
+            <option value="3">3 months — renews every 3rd payment</option>
+            <option value="6">6 months — renews every 6th payment</option>
+            <option value="12" selected>12 months — renews on the 13th payment (year 2)</option>
+          </select>
+        </div>
         <div class="field"><label>Monthly salary (₦)</label><input id="simSalary" type="number" placeholder="e.g. 500000"></div>
         <div class="field"><label>Interview link</label><input id="simInterviewLink" value="https://calendly.com/example/interview"></div>
       </div>
@@ -421,6 +437,7 @@ document.getElementById('refreshPlansBtn').onclick = loadPlans;
 document.getElementById('calcBtn').onclick = function(){
   const salary = parseFloat(document.getElementById('calcSalary').value);
   const planKey = document.getElementById('calcPlan').value;
+  const duration = parseInt(document.getElementById('calcDuration').value) || 12;
   if(!salary || salary <= 0){ showToast('Enter a valid salary', true); return; }
   if(!planKey){ showToast('Select a plan', true); return; }
   const plan = plansCache.find(p=>p.plan === planKey);
@@ -432,17 +449,18 @@ document.getElementById('calcBtn').onclick = function(){
   const hubMarkup = +(salary * hubMarkupBps / 10000).toFixed(2);
   const insurance = plan.base_premium_naira || 0;
 
-  const firstMonth = salary + platformFee + hubMarkup + insurance;
-  const laterMonths = salary + platformFee + hubMarkup;
+  const renewalMonth = salary + platformFee + hubMarkup + insurance;
+  const otherMonths = salary + platformFee + hubMarkup;
+  const cycleLabel = duration === 1 ? 'every month' : `every ${duration} months (month 1, then month ${duration+1}, ${2*duration+1}...)`;
 
   document.getElementById('calcResult').style.display = 'block';
   document.getElementById('calcResult').innerHTML = `
     <div class="calc-row"><span>Salary</span><span>₦${salary.toLocaleString()}</span></div>
     <div class="calc-row"><span>FetchTalos platform fee (${platformFeeBps/100}%)</span><span>₦${platformFee.toLocaleString()}</span></div>
     ${hubMarkupBps > 0 ? `<div class="calc-row"><span>Hub markup (${hubMarkupBps/100}%)</span><span>₦${hubMarkup.toLocaleString()}</span></div>` : ''}
-    <div class="calc-row"><span>Insurance (first month only)</span><span>₦${insurance.toLocaleString()}</span></div>
-    <div class="calc-row total"><span>First month total</span><span>₦${firstMonth.toLocaleString()}</span></div>
-    <div class="calc-row total"><span>Every month after</span><span>₦${laterMonths.toLocaleString()}</span></div>
+    <div class="calc-row"><span>Insurance (renews ${cycleLabel})</span><span>₦${insurance.toLocaleString()}</span></div>
+    <div class="calc-row total"><span>Renewal month total</span><span>₦${renewalMonth.toLocaleString()}</span></div>
+    <div class="calc-row total"><span>Other months</span><span>₦${otherMonths.toLocaleString()}</span></div>
   `;
 };
 
@@ -487,6 +505,7 @@ document.getElementById('simEngageBtn').onclick = async function(){
   const employer_name = document.getElementById('simEmployer').value.trim();
   const role_title = document.getElementById('simRole').value.trim();
   const coverage_plan = document.getElementById('simPlan').value;
+  const coverage_months = parseInt(document.getElementById('simDuration').value) || 12;
   const proposed_amount = parseFloat(document.getElementById('simSalary').value);
   const interview_link = document.getElementById('simInterviewLink').value.trim();
 
@@ -499,7 +518,7 @@ document.getElementById('simEngageBtn').onclick = async function(){
     const eng = await api('/v1/engagements/create', { method:'POST', body: JSON.stringify({
       talent_id, employer_name, role_title, coverage_plan,
       employer_country: 'NG', employer_currency: 'NGN',
-      coverage_months: 12, proposed_amount, interview_link,
+      coverage_months, proposed_amount, interview_link,
     })});
     simEngagementId = eng.engagement_id;
     simEngagementToken = eng.accept_token;

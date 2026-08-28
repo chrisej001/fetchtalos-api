@@ -1008,10 +1008,26 @@ async function settleNgnPayment(contract) {
   if (!talent) return { ngn_settlement_note: 'talent_not_found' };
 
   const alreadyPaidCount = [...db.payPeriods.values()].filter(p => p.contract_id === contract.contract_id && p.paid_at).length;
-  const isFirstPayment = alreadyPaidCount === 0;
 
-  if (isFirstPayment) {
-    const hadDocumentBefore = Boolean(contract.coverage_policy_document_url);
+  // Insurance doesn't just charge once — it renews on the SAME cycle as
+  // the coverage duration itself. 12 months -> renews on payment 1, then
+  // again on payment 13 (the first payment of year 2). 1 month -> renews
+  // EVERY payment. 3 or 6 -> every 3rd/6th payment. This is why
+  // coverage_months isn't just a label — it's the actual renewal clock.
+  const cycleMonths = Number(contract.coverage_months) || 1;
+  const isInsuranceRenewalDue = alreadyPaidCount % cycleMonths === 0;
+  const isFirstPayment = alreadyPaidCount === 0; // still needed below for the pay-period email copy — a renewal on payment 13 is NOT "first payment"
+
+  if (isInsuranceRenewalDue) {
+    // Reset before re-checking, not just before the FIRST purchase — a
+    // renewal on payment 13 needs its own "did THIS cycle's document just
+    // arrive" detection, not blocked by cycle 1's already-populated URL
+    // from a year ago. Without this, only the very first cycle would ever
+    // get a policy-document email; every renewal after it would be
+    // silently skipped since coverage_policy_document_url was already
+    // truthy going in.
+    contract.coverage_policy_document_url = null;
+    const hadDocumentBefore = false;
     const coverage = await buyInsuranceNgn({ talent, contract });
     Object.assign(contract, coverage);
 
@@ -1116,7 +1132,7 @@ async function settleNgnPayment(contract) {
         <p>Your payment for this pay period has landed.</p>
         <ul>
           <li><b>Amount:</b> ₦${remainingForTalent.toLocaleString()}</li>
-          ${isFirstPayment && contract.coverage_status === 'active' ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id} (your policy document follows in a separate email once it's ready)</li>` : ''}
+          ${isInsuranceRenewalDue && contract.coverage_status === 'active' ? `<li><b>Health coverage:</b> ${isFirstPayment ? 'Active' : 'Renewed'} — policy ${contract.coverage_policy_id} (your policy document follows in a separate email once it's ready)</li>` : ''}
           ${settledPeriod ? `<li><b>Pay period:</b> #${settledPeriod.period_number}</li>` : ''}
           ${nextPeriod ? `<li><b>Next payment due:</b> ${new Date(nextPeriod.due_date).toLocaleDateString()}</li>` : ''}
         </ul>
