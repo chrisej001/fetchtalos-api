@@ -926,6 +926,42 @@ async function buyInsuranceNgn({ talent, contract }) {
   }
 }
 
+/**
+ * Live premium quote — no talent needed, unlike buy_insurance. This is
+ * meant to be called BEFORE a contract exists (from the Plans page or the
+ * Simulate an Enterprise flow), so it deliberately doesn't require KYC
+ * fields the way a real purchase does.
+ *
+ * HONEST CAVEAT: Felicity announced this action exists and confirmed why
+ * it matters (payment_plan genuinely changes the premium, not just a
+ * display split), but didn't give us its exact request/response shape —
+ * we only have the announcement, not the doc section. This mirrors
+ * buy_insurance's PRICING-relevant fields (product_id, payment_plan,
+ * benefits) and deliberately omits KYC fields, since those shouldn't
+ * affect a price quote. If a real call reveals this guess is wrong, that
+ * error is authoritative — same discovery pattern gender/address/benefits/
+ * payment_plan were each confirmed through, not a guess to trust blindly.
+ */
+async function quoteInsuranceNgn({ plan, coverage_months }) {
+  const product_id = COVERAGE_PRODUCT_IDS[plan];
+  if (!product_id) return { error: 'gap_not_configured', message: `No product_id mapped for plan "${plan}"` };
+  const benefits = COVERAGE_PRODUCT_BENEFITS[plan];
+
+  try {
+    const result = await felicityNgn('quote_insurance', {
+      product_id,
+      payment_plan: ngnPaymentPlan(coverage_months),
+      ...(benefits ? { benefits } : {}),
+    });
+    // Defensive about the response shape too, for the same reason —
+    // check a few reasonable field names rather than assume one.
+    const premium = result.premium_naira ?? result.quote?.premium_naira ?? result.amount_naira ?? null;
+    return { premium_naira: premium, raw: result };
+  } catch (err) {
+    return { error: 'quote_failed', message: err.message };
+  }
+}
+
 /** Thin wrapper around get_policy — same white-labeled shape as buy, used
  * to manually re-check whether the document has landed yet (useful for a
  * demo, or as a fallback if a webhook delivery was ever missed). */
@@ -1978,6 +2014,19 @@ app.get('/v1/plans', async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: 'list_plans_failed', message: err.message });
   }
+});
+
+// GET /v1/plans/quote?plan=remote_contractor_basic&months=12 — the REAL
+// premium for a specific plan + duration combination, live from Felicity,
+// not the catalog's static base_premium. See quoteInsuranceNgn's own
+// comment for the honest caveat on this action's shape.
+app.get('/v1/plans/quote', async (req, res) => {
+  if (!FELICITY_NGN_CONFIGURED) return res.status(422).json({ error: 'not_configured' });
+  const { plan, months } = req.query;
+  if (!plan) return res.status(400).json({ error: 'plan_required' });
+  const result = await quoteInsuranceNgn({ plan, coverage_months: Number(months) || 12 });
+  if (result.error) return res.status(502).json(result);
+  res.json(result);
 });
 
 // GET /v1/talents/discover
