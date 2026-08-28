@@ -85,6 +85,7 @@ const db = {
   contracts: new Map(),
   payouts: new Map(),
   payPeriods: new Map(), // recurring salary pay periods per contract — see PAY PERIODS section below
+  ngnSettlements: [], // one entry per successful NGN settlement — real history, not a snapshot. Needed for accurate hub stats (a contract only ever remembers its LAST settlement, which under-reports anyone paid more than once).
 };
 
 const taxFormMap = { US: 'W-8BEN', UK: 'Self-Assessment (Overseas)', DE: 'Freistellungsauftrag Ref.', CA: 'W-8BEN + T4A-NR' };
@@ -1086,6 +1087,22 @@ async function settleNgnPayment(contract) {
     return { ngn_settlement_status: 'send_failed', ngn_settlement_note: err.message };
   }
 
+  // Real history, not a snapshot — this is what GET /v1/hub/stats actually
+  // sums from. Recorded only once we're past every failure point above,
+  // i.e. money genuinely moved.
+  db.ngnSettlements.push({
+    settlement_id: id('ngnset'),
+    contract_id: contract.contract_id,
+    talent_id: talent.talent_id,
+    talent_name: contract.talent_name,
+    hub_scope: talent.pipeline || null,
+    employer_name: contract.employer_name,
+    salary_naira: remainingForTalent,
+    platform_fee_naira: platformFeeNaira,
+    hub_markup_naira: hubMarkupNaira,
+    settled_at: new Date().toISOString(),
+  });
+
   const settledPeriod = settleOldestUnpaidPeriod(contract.contract_id);
   const nextPeriod = settledPeriod ? [...db.payPeriods.values()]
     .filter(p => p.contract_id === contract.contract_id && !p.paid_at)
@@ -1356,47 +1373,59 @@ function requireAdminKey(req, res, next) {
 
 // POST /admin/keys — create a new client key without touching Render at all.
 // Body: { client_id, type: "enterprise" | "hub", hub_scope: "ALX Africa",
-//          hub_markup_bps, hub_settlement_account: {account_number, account_name, bank_code} }
+//          hub_markup_cap_bps, hub_markup_bps, hub_settlement_account: {account_number, account_name, bank_code} }
 // hub_scope is REQUIRED when type is "hub" — it's what locks that key's
 // talent discovery down to one pipeline. Omit type to default to "enterprise".
-// hub_markup_bps/hub_settlement_account are OPTIONAL and hub-only — this is
-// the white-label revenue share: a hub can charge their own markup on top
-// of FetchTalos's platform fee, paid to their OWN account, every time a
-// talent under their pipeline gets paid. Deliberately admin-set, not
-// hub-self-service — same trust boundary as hub_scope itself.
+// hub_markup_cap_bps is the ADMIN-SET ceiling — the only thing you set
+// directly. hub_markup_bps is the hub's OWN chosen rate within that ceiling
+// (self-serve from the hub dashboard going forward) — always clamped to
+// the cap here too, so a direct admin write can't accidentally exceed a
+// cap you set a moment earlier. hub_settlement_account is likewise
+// settable by either you or the hub themselves later.
 // Persisted immediately if UPSTASH_REDIS_REST_URL/TOKEN are set — otherwise
 // this key dies the moment the server restarts (see PERSISTENCE section above).
 app.post('/admin/keys', requireAdminKey, async (req, res) => {
-  const { client_id, type = 'enterprise', hub_scope = null, hub_markup_bps = 0, hub_settlement_account = null } = req.body || {};
+  const { client_id, type = 'enterprise', hub_scope = null, hub_markup_cap_bps = 0, hub_markup_bps = 0, hub_settlement_account = null } = req.body || {};
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
   if (!['enterprise', 'hub'].includes(type)) return res.status(400).json({ error: 'type must be "enterprise" or "hub"' });
   if (type === 'hub' && !hub_scope) return res.status(400).json({ error: 'hub_scope is required when type is "hub"' });
 
+  const cap = type === 'hub' ? (Number(hub_markup_cap_bps) || 0) : 0;
+  const rate = type === 'hub' ? Math.min(Number(hub_markup_bps) || 0, cap) : 0;
+
   const newKey = `ft_live_${crypto.randomBytes(9).toString('hex')}`;
   KEYS[newKey] = {
     client_id, type, hub_scope: type === 'hub' ? hub_scope : null,
-    hub_markup_bps: type === 'hub' ? Number(hub_markup_bps) || 0 : 0,
+    hub_markup_cap_bps: cap,
+    hub_markup_bps: rate,
     hub_settlement_account: type === 'hub' ? (hub_settlement_account || null) : null,
   };
   await saveState();
-  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope, hub_markup_bps: KEYS[newKey].hub_markup_bps, hub_settlement_account: KEYS[newKey].hub_settlement_account, persisted: PERSISTENCE_ENABLED });
+  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope, hub_markup_cap_bps: cap, hub_markup_bps: rate, hub_settlement_account: KEYS[newKey].hub_settlement_account, persisted: PERSISTENCE_ENABLED });
 });
 
-// PATCH /admin/keys/:apiKey — set/update a hub's markup rate and settlement
-// account on a key that already exists. This is the endpoint you'd actually
-// use day to day, since hub keys are usually created once and their
-// commercial terms (markup %) negotiated/changed afterward.
+// PATCH /admin/keys/:apiKey — the admin-side update. Use this to set the
+// CEILING (hub_markup_cap_bps) — the hub's own dashboard is where they'll
+// adjust their actual rate within it going forward, via PATCH /v1/hub/markup.
+// This endpoint can still directly set hub_markup_bps too (e.g. for a hub
+// that hasn't onboarded to the dashboard yet), always clamped to the cap.
 app.patch('/admin/keys/:apiKey', requireAdminKey, async (req, res) => {
   const record = KEYS[req.params.apiKey];
   if (!record) return res.status(404).json({ error: 'key_not_found' });
   if (record.type !== 'hub') return res.status(400).json({ error: 'not_a_hub_key', message: 'Markup and settlement accounts only apply to hub-type keys.' });
 
-  const { hub_markup_bps, hub_settlement_account } = req.body || {};
-  if (hub_markup_bps !== undefined) record.hub_markup_bps = Number(hub_markup_bps) || 0;
+  const { hub_markup_cap_bps, hub_markup_bps, hub_settlement_account } = req.body || {};
+  if (hub_markup_cap_bps !== undefined) {
+    record.hub_markup_cap_bps = Number(hub_markup_cap_bps) || 0;
+    // Lowering the cap below the hub's current rate pulls their rate down
+    // with it — never leave a rate silently exceeding its own ceiling.
+    if (record.hub_markup_bps > record.hub_markup_cap_bps) record.hub_markup_bps = record.hub_markup_cap_bps;
+  }
+  if (hub_markup_bps !== undefined) record.hub_markup_bps = Math.min(Number(hub_markup_bps) || 0, record.hub_markup_cap_bps || 0);
   if (hub_settlement_account !== undefined) record.hub_settlement_account = hub_settlement_account;
 
   await saveState();
-  res.json({ client_id: record.client_id, hub_scope: record.hub_scope, hub_markup_bps: record.hub_markup_bps, hub_settlement_account: record.hub_settlement_account });
+  res.json({ client_id: record.client_id, hub_scope: record.hub_scope, hub_markup_cap_bps: record.hub_markup_cap_bps, hub_markup_bps: record.hub_markup_bps, hub_settlement_account: record.hub_settlement_account });
 });
 
 // GET /admin/keys — list every client, their type/scope, and their key (masked).
@@ -1405,6 +1434,7 @@ app.get('/admin/keys', requireAdminKey, (req, res) => {
     client_id: r.client_id,
     type: r.type,
     hub_scope: r.hub_scope,
+    hub_markup_cap_bps: r.hub_markup_cap_bps || 0,
     hub_markup_bps: r.hub_markup_bps || 0,
     hub_settlement_account: r.hub_settlement_account || null,
     key_preview: key.slice(0, 12) + '…' + key.slice(-4)
@@ -1876,6 +1906,39 @@ app.use('/v1', (req, res, next) => {
   return requireApiKey(req, res, next);
 });
 
+// GET /v1/plans — real benefits + pricing for every coverage plan, pulled
+// live from the actual Felicity catalog. Available to any authenticated
+// client (hub or enterprise) — both need this to make an informed choice
+// BEFORE a contract exists, not just see a bare plan name. Never surfaces
+// provider branding — only product_description/base_premium, which
+// Felicity's own doc confirms are brand-neutral by design.
+app.get('/v1/plans', async (req, res) => {
+  if (!FELICITY_NGN_CONFIGURED) {
+    return res.status(422).json({ error: 'not_configured', message: 'Live plan data isn\'t available yet — the NGN rail isn\'t configured.' });
+  }
+  try {
+    const catalog = await listInsuranceProductsNgn();
+    const products = catalog.products || catalog.data || catalog;
+    const plans = Object.entries(COVERAGE_PRODUCT_IDS).map(([planKey, productId]) => {
+      const label = coveragePlanCopy[planKey]?.label || planKey;
+      if (!productId) return { plan: planKey, label, configured: false };
+      const product = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
+      return {
+        plan: planKey,
+        label,
+        configured: true,
+        base_premium_naira: product?.base_premium ?? null,
+        description: product?.product_description ?? null,
+        benefits: COVERAGE_PRODUCT_BENEFITS[planKey] || null,
+        duration_options_months: product?.duration_options ?? null,
+      };
+    });
+    res.json({ plans });
+  } catch (err) {
+    res.status(502).json({ error: 'list_plans_failed', message: err.message });
+  }
+});
+
 // GET /v1/talents/discover
 app.get('/v1/talents/discover', (req, res) => {
   const { skill, region, status } = req.query;
@@ -2010,6 +2073,96 @@ app.patch('/v1/talents/:id', async (req, res) => {
   await saveState();
   res.json(talent);
 });
+
+/* ---------------------------------------------------------------------- *
+ * HUB SELF-SERVICE ACCOUNT MANAGEMENT — the pieces of a hub's own account
+ * that used to be admin-only (PATCH /admin/keys/:apiKey). A hub can only
+ * ever touch its OWN record here, found by matching req.clientId (set by
+ * requireApiKey from whichever key they connected with) against the KEYS
+ * store — never by an ID they could supply themselves.
+ * ---------------------------------------------------------------------- */
+function findOwnHubKeyRecord(clientId) {
+  return Object.values(KEYS).find(r => r.type === 'hub' && r.client_id === clientId);
+}
+
+// PATCH /v1/hub/markup — set the hub's OWN white-label markup rate, always
+// clamped server-side to the cap YOU set (hub_markup_cap_bps) — never
+// trusted from the request even if the hub's own dashboard UI tries to
+// send something higher. Body: { "markup_bps": 350 } (350 = 3.5%).
+app.patch('/v1/hub/markup', async (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  const record = findOwnHubKeyRecord(req.clientId);
+  if (!record) return res.status(404).json({ error: 'hub_key_not_found' });
+
+  const requested = Number(req.body?.markup_bps);
+  if (isNaN(requested) || requested < 0) return res.status(400).json({ error: 'markup_bps_required', message: 'markup_bps must be a non-negative number (e.g. 350 for 3.5%).' });
+
+  const cap = record.hub_markup_cap_bps || 0;
+  if (requested > cap) {
+    return res.status(400).json({ error: 'exceeds_cap', message: `Your markup ceiling is ${cap / 100}% — ask FetchTalos to raise it if you need more.`, cap_bps: cap });
+  }
+
+  record.hub_markup_bps = requested;
+  await saveState();
+  res.json({ hub_markup_bps: record.hub_markup_bps, hub_markup_cap_bps: cap });
+});
+
+// PATCH /v1/hub/settlement-account — where this hub's OWN markup gets
+// paid, every time a talent under their pipeline gets settled.
+app.patch('/v1/hub/settlement-account', async (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  const record = findOwnHubKeyRecord(req.clientId);
+  if (!record) return res.status(404).json({ error: 'hub_key_not_found' });
+
+  const { account_number, account_name, bank_code } = req.body || {};
+  if (!account_number || !account_name || !bank_code) {
+    return res.status(400).json({ error: 'incomplete_account', message: 'account_number, account_name, and bank_code are all required.' });
+  }
+
+  record.hub_settlement_account = { account_number, account_name, bank_code };
+  await saveState();
+  res.json({ hub_settlement_account: record.hub_settlement_account });
+});
+
+// GET /v1/hub/account — the hub's own current settings, so the dashboard
+// has something to load on open (markup, cap, settlement account, scope).
+app.get('/v1/hub/account', (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  const record = findOwnHubKeyRecord(req.clientId);
+  if (!record) return res.status(404).json({ error: 'hub_key_not_found' });
+  res.json({
+    client_id: record.client_id,
+    hub_scope: record.hub_scope,
+    hub_markup_bps: record.hub_markup_bps || 0,
+    hub_markup_cap_bps: record.hub_markup_cap_bps || 0,
+    hub_settlement_account: record.hub_settlement_account || null,
+  });
+});
+
+// GET /v1/hub/stats — real activity numbers, scoped to just this hub's own
+// pipeline. Talent/contract counts are computed live from current state;
+// payment/markup totals come from db.ngnSettlements (see settleNgnPayment),
+// a real per-settlement ledger — NOT the "last settlement only" snapshot
+// already sitting on each contract, which would silently under-report
+// anyone who's been paid more than once.
+app.get('/v1/hub/stats', (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+
+  const myTalentIds = new Set(db.talents.filter(t => t.pipeline === req.hubScope).map(t => t.talent_id));
+  const myContracts = [...db.contracts.values()].filter(c => myTalentIds.has(c.talent_id));
+  const mySettlements = db.ngnSettlements.filter(s => s.hub_scope === req.hubScope);
+
+  res.json({
+    talents_in_roster: myTalentIds.size,
+    active_contracts: myContracts.filter(c => c.status === 'active').length,
+    total_contracts: myContracts.length,
+    enterprises_engaged: new Set(myContracts.map(c => c.employer_name)).size,
+    payments_settled: mySettlements.length,
+    total_salary_paid_out_naira: +mySettlements.reduce((sum, s) => sum + s.salary_naira, 0).toFixed(2),
+    total_markup_earned_naira: +mySettlements.reduce((sum, s) => sum + s.hub_markup_naira, 0).toFixed(2),
+  });
+});
+
 
 /* ---------------------------------------------------------------------- *
  * THE HIRING FLOW — this is the real sequence, not one instant API call:

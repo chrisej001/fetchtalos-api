@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FetchTalos — Hub Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Newsreader:wght@400;500;600&display=swap');
+  :root{
+    --bg-base:#0B0E14; --bg-surface:#12161F; --bg-raised:#1A202C; --bg-input:#0D1017;
+    --border:#232936;
+    --amber:#F2A65A; --teal:#5EEAD4; --red:#E8635A; --purple:#C4A2F0;
+    --text:#EDEFF3; --text-muted:#8B93A7; --text-faint:#525C6E;
+  }
+  *{box-sizing:border-box;}
+  body{background:var(--bg-base); color:var(--text); font-family:'IBM Plex Mono',monospace; margin:0; padding:0;}
+  h1,h2,h3{font-family:'Newsreader',serif; font-weight:600; margin:0;}
+  .topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 28px; border-bottom:1px solid var(--border); background:var(--bg-surface); flex-wrap:wrap; gap:12px;}
+  .topbar h1{font-size:20px;}
+  .topbar .conn{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+  input, select, textarea{background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:8px 10px; border-radius:6px; font-family:inherit; font-size:13px;}
+  .search-input{width:280px;}
+  button{cursor:pointer; font-family:inherit; border-radius:6px; border:1px solid var(--border); background:var(--bg-raised); color:var(--text); padding:8px 14px; font-size:13px;}
+  .btn-primary{background:var(--amber); color:#1a1305; border:none; font-weight:600;}
+  .btn-teal{background:var(--teal); color:#062521; border:none; font-weight:600;}
+  .row-btn{padding:6px 12px; font-size:12px;}
+  .status-dot{width:8px; height:8px; border-radius:50%; background:var(--text-faint); display:inline-block;}
+  .status-dot.on{background:var(--teal);}
+  .tabbar{display:flex; gap:4px; padding:0 28px; border-bottom:1px solid var(--border); background:var(--bg-surface);}
+  .tabbtn{background:none; border:none; border-bottom:2px solid transparent; border-radius:0; padding:14px 16px; color:var(--text-muted); font-size:13px;}
+  .tabbtn.active{color:var(--text); border-bottom-color:var(--amber);}
+  main{padding:28px; max-width:1100px; margin:0 auto;}
+  .panel{display:none;}
+  .panel.active{display:block;}
+  .panel-head{margin-bottom:20px;}
+  .panel-head .sub{color:var(--text-muted); font-size:12.5px; margin-top:4px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:12px; color:var(--text-muted); margin-bottom:5px;}
+  .field input, .field select, .field textarea{width:100%;}
+  .form-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px 18px; margin-bottom:16px;}
+  .stat-strip{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:8px; overflow:hidden;}
+  .stat-cell{background:var(--bg-surface); padding:16px;}
+  .stat-cell .l{font-size:10.5px; color:var(--text-faint); letter-spacing:.04em;}
+  .stat-cell .v{font-size:22px; font-family:'Newsreader',serif; margin-top:4px;}
+  .tbl-wrap{border:1px solid var(--border); border-radius:8px; overflow:hidden; margin-top:14px;}
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th{text-align:left; background:var(--bg-surface); color:var(--text-faint); font-size:10.5px; letter-spacing:.04em; padding:10px 14px; border-bottom:1px solid var(--border);}
+  td{padding:12px 14px; border-bottom:1px solid var(--border); vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  .empty-state{padding:34px 20px; text-align:center; color:var(--text-faint); font-size:12.5px;}
+  .card{background:var(--bg-surface); border:1px solid var(--border); border-radius:10px; padding:20px;}
+  .plan-card{background:var(--bg-surface); border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:14px;}
+  .plan-card h3{font-size:17px; margin-bottom:6px;}
+  .plan-card .price{color:var(--teal); font-size:22px; font-family:'Newsreader',serif; margin:8px 0;}
+  .plan-card ul{margin:8px 0; padding-left:20px; font-size:13px; color:var(--text-muted);}
+  .toast{position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--bg-raised); border:1px solid var(--border); padding:11px 20px; border-radius:8px; font-size:13px; opacity:0; transition:.25s; pointer-events:none; max-width:520px; text-align:center;}
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  .toast.err{border-color:var(--red); color:var(--red);}
+  .banner{background:rgba(94,234,212,.06); border:1px solid rgba(94,234,212,.25); border-radius:8px; padding:14px 16px; margin-bottom:20px; font-size:12.5px; color:var(--text-muted);}
+  .calc{background:var(--bg-raised); border:1px solid var(--border); border-radius:8px; padding:16px; margin-top:14px;}
+  .calc-row{display:flex; justify-content:space-between; padding:5px 0; font-size:13px;}
+  .calc-row.total{border-top:1px solid var(--border); margin-top:6px; padding-top:10px; font-weight:600; color:var(--amber);}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>🏢 Hub Dashboard</h1>
+  <div class="conn">
+    <input class="search-input" id="baseUrlInput" value="https://fetchtalos.onrender.com" style="width:260px;">
+    <input id="hubKeyInput" placeholder="Your hub API key" style="width:220px;">
+    <button class="btn-primary" id="connectBtn">Connect</button>
+    <span><span class="status-dot" id="connDot"></span> <span id="connLabel">not connected</span></span>
+  </div>
+</div>
+
+<div class="tabbar">
+  <button class="tabbtn active" data-panel="overview">Overview</button>
+  <button class="tabbtn" data-panel="talents">My Talents</button>
+  <button class="tabbtn" data-panel="markup">Markup &amp; Settlement</button>
+  <button class="tabbtn" data-panel="plans">Plans</button>
+</div>
+
+<main>
+  <div class="banner">This dashboard is entered with your hub API key — no separate login yet. Real account signup (email/password, admin-approved before going live) comes once a hub is ready to fully onboard.</div>
+
+  <section class="panel active" id="panel-overview">
+    <div class="panel-head"><h2>Overview</h2><p class="sub">GET /v1/hub/stats — your own activity only</p></div>
+    <div class="stat-strip" id="statsStrip">
+      <div class="stat-cell"><div class="l">TALENTS IN ROSTER</div><div class="v">—</div></div>
+      <div class="stat-cell"><div class="l">ACTIVE CONTRACTS</div><div class="v">—</div></div>
+      <div class="stat-cell"><div class="l">ENTERPRISES ENGAGED</div><div class="v">—</div></div>
+      <div class="stat-cell"><div class="l">PAYMENTS SETTLED</div><div class="v">—</div></div>
+      <div class="stat-cell"><div class="l">TOTAL SALARY PAID (₦)</div><div class="v">—</div></div>
+      <div class="stat-cell"><div class="l">YOUR MARKUP EARNED (₦)</div><div class="v">—</div></div>
+    </div>
+    <button class="row-btn" id="refreshStatsBtn" style="margin-top:16px;">↻ Refresh</button>
+  </section>
+
+  <section class="panel" id="panel-talents">
+    <div class="panel-head"><h2>My Talents</h2><p class="sub">Your own roster — upload new talent (bulk or one at a time), or edit anyone already here</p></div>
+
+    <div class="card" style="margin-bottom:24px;">
+      <h3 style="font-size:15px; margin-bottom:14px;">Add a talent</h3>
+      <div class="form-grid">
+        <div class="field"><label>Full name</label><input id="tName" placeholder="e.g. Amaka Eze"></div>
+        <div class="field"><label>Email</label><input id="tEmail" placeholder="e.g. amaka@example.com"></div>
+        <div class="field"><label>Country</label><input id="tCountry" value="NG"></div>
+        <div class="field"><label>Vetted score</label><input id="tScore" type="number" placeholder="e.g. 88"></div>
+        <div class="field" style="grid-column:1/-1;"><label>Stack (comma separated)</label><input id="tStack" placeholder="e.g. React, Node, Postgres"></div>
+      </div>
+      <button class="btn-primary" id="addTalentBtn">Add to roster</button>
+      <div id="addTalentResult" style="margin-top:10px;"></div>
+    </div>
+
+    <button class="row-btn" id="refreshTalentsBtn" style="margin-bottom:14px;">↻ Refresh</button>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>Name</th><th>Email</th><th>Stack</th><th>Country</th><th>Score</th><th>Status</th></tr></thead>
+      <tbody id="talentsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-markup">
+    <div class="panel-head"><h2>Markup &amp; Settlement Account</h2><p class="sub">Your white-label revenue share on top of FetchTalos's own platform fee, paid to your own account every time a talent under your pipeline gets paid</p></div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3 style="font-size:15px;">Your markup rate</h3>
+      <p style="font-size:12.5px; color:var(--text-muted); margin:8px 0 16px;">Ceiling set by FetchTalos: <b id="capDisplay">—</b>. You can set your own rate anywhere up to that.</p>
+      <div class="field" style="max-width:240px;"><label>Your rate (%)</label><input id="markupInput" type="number" step="0.1" placeholder="e.g. 3.5"></div>
+      <button class="btn-primary" id="saveMarkupBtn">Save rate</button>
+      <div id="markupResult" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:15px;">Where your markup gets paid</h3>
+      <div class="form-grid" style="margin-top:14px;">
+        <div class="field"><label>Account number</label><input id="settleAcct"></div>
+        <div class="field"><label>Account name</label><input id="settleName"></div>
+        <div class="field"><label>Bank code</label><input id="settleBank" placeholder="e.g. 058"></div>
+      </div>
+      <button class="btn-primary" id="saveSettleBtn">Save settlement account</button>
+      <div id="settleResult" style="margin-top:10px;"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-plans">
+    <div class="panel-head"><h2>Plans</h2><p class="sub">GET /v1/plans — real benefits and pricing, straight from the live catalog</p></div>
+    <button class="row-btn" id="refreshPlansBtn" style="margin-bottom:16px;">↻ Refresh</button>
+    <div id="plansContainer"><div class="empty-state">// connect to load</div></div>
+
+    <div class="card" style="margin-top:24px;">
+      <h3 style="font-size:15px;">Estimate a total</h3>
+      <p style="font-size:12.5px; color:var(--text-muted); margin:6px 0 14px;">What an enterprise would actually owe — salary + FetchTalos's fee + your markup, plus insurance on the first payment only.</p>
+      <div class="form-grid">
+        <div class="field"><label>Monthly salary (₦)</label><input id="calcSalary" type="number" placeholder="e.g. 500000"></div>
+        <div class="field"><label>Plan</label><select id="calcPlan"><option value="">Select a plan…</option></select></div>
+      </div>
+      <button class="row-btn" id="calcBtn">Calculate</button>
+      <div class="calc" id="calcResult" style="display:none;"></div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+let API_KEY = '';
+let connected = false;
+let hubAccount = null;
+let plansCache = [];
+
+function showToast(msg, isErr){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  setTimeout(()=>{ t.className = 'toast'; }, 3200);
+}
+
+function api(path, opts){
+  opts = opts || {};
+  const headers = Object.assign({ 'Content-Type':'application/json', 'Authorization': 'Bearer ' + API_KEY }, opts.headers || {});
+  return fetch(BASE_URL + path, Object.assign({}, opts, { headers })).then(res=>
+    res.json().catch(()=>({})).then(data=>{
+      if(!res.ok){ const err = new Error(data.message || data.error || ('HTTP '+res.status)); err.data = data; throw err; }
+      return data;
+    })
+  );
+}
+
+document.querySelectorAll('.tabbtn').forEach(btn=>{
+  btn.addEventListener('click', function(){
+    document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    this.classList.add('active');
+    document.getElementById('panel-' + this.dataset.panel).classList.add('active');
+  });
+});
+
+document.getElementById('connectBtn').onclick = async function(){
+  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+  API_KEY = document.getElementById('hubKeyInput').value.trim();
+  if(!API_KEY){ showToast('Paste your hub API key first', true); return; }
+  try{
+    const account = await api('/v1/hub/account');
+    hubAccount = account;
+    connected = true;
+    document.getElementById('connDot').classList.add('on');
+    document.getElementById('connLabel').textContent = account.hub_scope + ' — connected';
+    showToast('Connected');
+    loadStats(); loadTalents(); loadMarkupPanel(); loadPlans();
+  }catch(err){
+    connected = false;
+    document.getElementById('connDot').classList.remove('on');
+    document.getElementById('connLabel').textContent = 'connection failed';
+    showToast('Connect failed: ' + err.message + (err.data?.error==='hub_only' ? ' (this dashboard is for hub-type keys only)' : ''), true);
+  }
+};
+
+/* OVERVIEW */
+async function loadStats(){
+  if(!connected) return;
+  try{
+    const s = await api('/v1/hub/stats');
+    const cells = document.querySelectorAll('#statsStrip .v');
+    cells[0].textContent = s.talents_in_roster;
+    cells[1].textContent = s.active_contracts;
+    cells[2].textContent = s.enterprises_engaged;
+    cells[3].textContent = s.payments_settled;
+    cells[4].textContent = '₦' + s.total_salary_paid_out_naira.toLocaleString();
+    cells[5].textContent = '₦' + s.total_markup_earned_naira.toLocaleString();
+  }catch(err){ showToast('Failed to load stats: ' + err.message, true); }
+}
+document.getElementById('refreshStatsBtn').onclick = loadStats;
+
+/* TALENTS */
+async function loadTalents(){
+  if(!connected) return;
+  try{
+    const data = await api('/v1/talents/roster');
+    const tbody = document.getElementById('talentsTableBody');
+    tbody.innerHTML = data.results.length ? data.results.map(t=>`
+      <tr><td><strong>${t.name}</strong></td><td>${t.email}</td>
+      <td class="mono" style="font-size:12px;">${(t.stack||[]).join(', ')}</td>
+      <td>${t.country}</td><td>${t.vetted_score}</td>
+      <td class="mono" style="font-size:12px;">${t.status}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="empty-state">// no talents uploaded yet</td></tr>';
+  }catch(err){ showToast('Failed to load roster: ' + err.message, true); }
+}
+document.getElementById('refreshTalentsBtn').onclick = loadTalents;
+
+document.getElementById('addTalentBtn').onclick = async function(){
+  const name = document.getElementById('tName').value.trim();
+  const email = document.getElementById('tEmail').value.trim();
+  const country = document.getElementById('tCountry').value.trim() || 'NG';
+  const vetted_score = parseInt(document.getElementById('tScore').value) || undefined;
+  const stack = document.getElementById('tStack').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!name || !email){ showToast('Name and email are required', true); return; }
+  try{
+    const result = await api('/v1/talents/upload', { method:'POST', body: JSON.stringify({ talents: [{ name, email, country, vetted_score, stack }] }) });
+    const r = result.results[0];
+    if(r.error){ showToast('Failed: ' + r.message, true); return; }
+    document.getElementById('addTalentResult').innerHTML = `<div style="color:var(--teal);font-size:12.5px;">${r.action === 'created' ? 'Added' : 'Updated'}: ${r.talent.name}</div>`;
+    showToast('Talent saved');
+    ['tName','tEmail','tScore','tStack'].forEach(id=>document.getElementById(id).value='');
+    loadTalents(); loadStats();
+  }catch(err){ showToast('Failed: ' + err.message, true); }
+};
+
+/* MARKUP & SETTLEMENT */
+function loadMarkupPanel(){
+  if(!hubAccount) return;
+  document.getElementById('capDisplay').textContent = (hubAccount.hub_markup_cap_bps/100) + '%';
+  document.getElementById('markupInput').value = hubAccount.hub_markup_bps/100;
+  if(hubAccount.hub_settlement_account){
+    document.getElementById('settleAcct').value = hubAccount.hub_settlement_account.account_number || '';
+    document.getElementById('settleName').value = hubAccount.hub_settlement_account.account_name || '';
+    document.getElementById('settleBank').value = hubAccount.hub_settlement_account.bank_code || '';
+  }
+}
+
+document.getElementById('saveMarkupBtn').onclick = async function(){
+  const pct = parseFloat(document.getElementById('markupInput').value);
+  if(isNaN(pct) || pct < 0){ showToast('Enter a valid percentage', true); return; }
+  try{
+    const result = await api('/v1/hub/markup', { method:'PATCH', body: JSON.stringify({ markup_bps: Math.round(pct*100) }) });
+    hubAccount.hub_markup_bps = result.hub_markup_bps;
+    document.getElementById('markupResult').innerHTML = `<span style="color:var(--teal);font-size:12.5px;">Saved: ${result.hub_markup_bps/100}%</span>`;
+    showToast('Markup updated');
+  }catch(err){ showToast('Failed: ' + err.message, true); }
+};
+
+document.getElementById('saveSettleBtn').onclick = async function(){
+  const account_number = document.getElementById('settleAcct').value.trim();
+  const account_name = document.getElementById('settleName').value.trim();
+  const bank_code = document.getElementById('settleBank').value.trim();
+  if(!account_number || !account_name || !bank_code){ showToast('All three fields are required', true); return; }
+  try{
+    await api('/v1/hub/settlement-account', { method:'PATCH', body: JSON.stringify({ account_number, account_name, bank_code }) });
+    document.getElementById('settleResult').innerHTML = '<span style="color:var(--teal);font-size:12.5px;">Saved</span>';
+    showToast('Settlement account updated');
+  }catch(err){ showToast('Failed: ' + err.message, true); }
+};
+
+/* PLANS */
+async function loadPlans(){
+  if(!connected) return;
+  const container = document.getElementById('plansContainer');
+  try{
+    const data = await api('/v1/plans');
+    plansCache = data.plans.filter(p=>p.configured);
+    container.innerHTML = data.plans.map(p=>{
+      if(!p.configured) return `<div class="plan-card"><h3>${p.label}</h3><p style="color:var(--text-faint);font-size:12.5px;">Not yet available on this plan.</p></div>`;
+      return `<div class="plan-card">
+        <h3>${p.label}</h3>
+        ${p.description ? `<p style="font-size:12.5px;color:var(--text-muted);">${p.description}</p>` : ''}
+        <div class="price">₦${(p.base_premium_naira||0).toLocaleString()} <span style="font-size:12px;color:var(--text-faint);">base premium</span></div>
+        ${p.benefits ? '<ul>'+p.benefits.map(b=>'<li>'+b+'</li>').join('')+'</ul>' : '<p style="font-size:12px;color:var(--text-faint);">Benefits not yet confirmed for this plan.</p>'}
+      </div>`;
+    }).join('');
+
+    const sel = document.getElementById('calcPlan');
+    sel.innerHTML = '<option value="">Select a plan…</option>' + plansCache.map(p=>`<option value="${p.plan}">${p.label} — ₦${(p.base_premium_naira||0).toLocaleString()}</option>`).join('');
+  }catch(err){
+    container.innerHTML = `<div class="empty-state">${err.message}</div>`;
+  }
+}
+document.getElementById('refreshPlansBtn').onclick = loadPlans;
+
+document.getElementById('calcBtn').onclick = function(){
+  const salary = parseFloat(document.getElementById('calcSalary').value);
+  const planKey = document.getElementById('calcPlan').value;
+  if(!salary || salary <= 0){ showToast('Enter a valid salary', true); return; }
+  if(!planKey){ showToast('Select a plan', true); return; }
+  const plan = plansCache.find(p=>p.plan === planKey);
+  if(!plan){ showToast('Plan not found', true); return; }
+
+  const platformFeeBps = 500; // FetchTalos's own 5% — matches PLATFORM_FEE_BPS server-side
+  const hubMarkupBps = (hubAccount && hubAccount.hub_markup_bps) || 0;
+  const platformFee = +(salary * platformFeeBps / 10000).toFixed(2);
+  const hubMarkup = +(salary * hubMarkupBps / 10000).toFixed(2);
+  const insurance = plan.base_premium_naira || 0;
+
+  const firstMonth = salary + platformFee + hubMarkup + insurance;
+  const laterMonths = salary + platformFee + hubMarkup;
+
+  document.getElementById('calcResult').style.display = 'block';
+  document.getElementById('calcResult').innerHTML = `
+    <div class="calc-row"><span>Salary</span><span>₦${salary.toLocaleString()}</span></div>
+    <div class="calc-row"><span>FetchTalos platform fee (${platformFeeBps/100}%)</span><span>₦${platformFee.toLocaleString()}</span></div>
+    ${hubMarkupBps > 0 ? `<div class="calc-row"><span>Hub markup (${hubMarkupBps/100}%)</span><span>₦${hubMarkup.toLocaleString()}</span></div>` : ''}
+    <div class="calc-row"><span>Insurance (first month only)</span><span>₦${insurance.toLocaleString()}</span></div>
+    <div class="calc-row total"><span>First month total</span><span>₦${firstMonth.toLocaleString()}</span></div>
+    <div class="calc-row total"><span>Every month after</span><span>₦${laterMonths.toLocaleString()}</span></div>
+  `;
+};
+</script>
+</body>
+</html>
