@@ -1555,7 +1555,16 @@ app.get('/admin/felicity-ngn/products', requireAdminKey, async (req, res) => {
       const productId = COVERAGE_PRODUCT_IDS[req.query.plan];
       if (!productId) return res.status(400).json({ error: 'unknown_plan', message: `"${req.query.plan}" isn't in COVERAGE_PRODUCT_IDS` });
       const match = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
-      return res.json({ plan: req.query.plan, product_id: productId, product: match || null, note: match ? undefined : 'Product ID not found in the returned catalog — check COVERAGE_PRODUCT_IDS against a live product_id.' });
+      // base_premium_confirmed_naira is a computed field WE add — not raw
+      // from Felicity — kept alongside the untouched raw product data so
+      // this stays useful as a diagnostic (see what they actually sent)
+      // while also showing the corrected figure directly, confirmed via
+      // Felicity's own kobo disclosure, not a guess.
+      return res.json({
+        plan: req.query.plan, product_id: productId, product: match || null,
+        base_premium_confirmed_naira: match ? koboFieldToNaira(match, 'base_premium', 'base_premium_naira') : null,
+        note: match ? undefined : 'Product ID not found in the returned catalog — check COVERAGE_PRODUCT_IDS against a live product_id.',
+      });
     }
     res.json({ count: Array.isArray(products) ? products.length : undefined, products });
   } catch (err) {
@@ -1928,6 +1937,22 @@ app.use('/v1', (req, res, next) => {
 // BEFORE a contract exists, not just see a bare plan name. Never surfaces
 // provider branding — only product_description/base_premium, which
 // Felicity's own doc confirms are brand-neutral by design.
+//
+// base_premium is denominated in KOBO, not naira — confirmed directly by
+// Felicity's integrations team after we flagged a real pricing
+// discrepancy (a live annual purchase debited ₦250, not the expected
+// amount). This was a genuine bug on our side: nothing in the original
+// API response disclosed the unit, and 250000 reads naturally as
+// ₦250,000 when it's actually ₦2,500. Felicity has since added an
+// explicit *_naira field to their catalog response — this prefers that
+// when present, and falls back to the confirmed /100 conversion of the
+// raw kobo field otherwise (a fixed, disclosed ratio, not a guess).
+function koboFieldToNaira(product, koboField, naira_field) {
+  if (product?.[naira_field] != null) return Number(product[naira_field]);
+  if (product?.[koboField] != null) return Number(product[koboField]) / 100;
+  return null;
+}
+
 app.get('/v1/plans', async (req, res) => {
   if (!FELICITY_NGN_CONFIGURED) {
     return res.status(422).json({ error: 'not_configured', message: 'Live plan data isn\'t available yet — the NGN rail isn\'t configured.' });
@@ -1943,7 +1968,7 @@ app.get('/v1/plans', async (req, res) => {
         plan: planKey,
         label,
         configured: true,
-        base_premium_naira: product?.base_premium ?? null,
+        base_premium_naira: koboFieldToNaira(product, 'base_premium', 'base_premium_naira'),
         description: product?.product_description ?? null,
         benefits: COVERAGE_PRODUCT_BENEFITS[planKey] || null,
         duration_options_months: product?.duration_options ?? null,
