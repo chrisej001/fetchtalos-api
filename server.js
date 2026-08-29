@@ -1536,6 +1536,28 @@ app.patch('/admin/talents/:id', requireAdminKey, async (req, res) => {
   res.json(talent);
 });
 
+// A talent with any contract still in progress (pending signature, or
+// actively employed) can't be deleted out from under that relationship —
+// this would orphan real contract/pay-period records referencing a
+// talent_id that no longer exists. Release the contract first (see
+// POST /v1/contracts/:id/release below), which is itself what flips
+// their status back to available.
+function talentHasContractInProgress(talentId) {
+  return [...db.contracts.values()].some(c => c.talent_id === talentId && c.status !== 'released');
+}
+
+// DELETE /admin/talents/:id — admin can delete anyone, no scope restriction.
+app.delete('/admin/talents/:id', requireAdminKey, async (req, res) => {
+  const idx = db.talents.findIndex(t => t.talent_id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'talent_not_found' });
+  if (talentHasContractInProgress(req.params.id)) {
+    return res.status(409).json({ error: 'contract_in_progress', message: 'This talent has a contract that is still pending or active — release it first (POST /v1/contracts/:id/release), then delete.' });
+  }
+  const [deleted] = db.talents.splice(idx, 1);
+  await saveState();
+  res.json({ deleted: true, talent_id: deleted.talent_id, name: deleted.name });
+});
+
 // GET /admin/mycover/status — is coverage configured at all, and how
 app.get('/admin/mycover/status', requireAdminKey, (req, res) => {
   res.json({
@@ -2164,6 +2186,23 @@ app.patch('/v1/talents/:id', async (req, res) => {
   res.json(talent);
 });
 
+// DELETE /v1/talents/:id — hub can only delete their OWN roster's talents,
+// same ownership check as the PATCH above. Same in-progress-contract
+// safety check as the admin version.
+app.delete('/v1/talents/:id', async (req, res) => {
+  if (req.clientType !== 'hub') {
+    return res.status(403).json({ error: 'hub_only', message: 'This endpoint is for hub-type keys only.' });
+  }
+  const idx = db.talents.findIndex(t => t.talent_id === req.params.id && t.pipeline === req.hubScope);
+  if (idx === -1) return res.status(404).json({ error: 'talent_not_found' });
+  if (talentHasContractInProgress(req.params.id)) {
+    return res.status(409).json({ error: 'contract_in_progress', message: 'This talent has a contract that is still pending or active — the enterprise needs to release it first, then you can delete.' });
+  }
+  const [deleted] = db.talents.splice(idx, 1);
+  await saveState();
+  res.json({ deleted: true, talent_id: deleted.talent_id, name: deleted.name });
+});
+
 /* ---------------------------------------------------------------------- *
  * HUB SELF-SERVICE ACCOUNT MANAGEMENT — the pieces of a hub's own account
  * that used to be admin-only (PATCH /admin/keys/:apiKey). A hub can only
@@ -2727,6 +2766,43 @@ app.post('/v1/contracts/:id/simulate-deposit', async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: 'simulate_funding_failed', message: err.message });
   }
+});
+
+// POST /v1/contracts/:id/release — the enterprise (or hub, whichever
+// client owns this contract) ends the relationship. This is deliberately
+// scoped to the CONTRACT, not the earlier engagement stage — releasing
+// covers both "we sent a contract but changed our mind before it was
+// accepted" and "this person's real employment is ending." Either way:
+// the contract is marked released (a terminal state — see
+// talentHasContractInProgress above), any pay periods that haven't been
+// paid yet are removed since they'll never happen now, and the talent's
+// own status flips back to available so they show up in discovery again.
+// Deliberately does NOT attempt anything with the Felicity side (no
+// action exists to deactivate an onboarded NGN account or an active
+// policy, and nothing here needs one — an idle, unused account is fine).
+// Money already paid stays paid; this only ever affects what's still ahead.
+app.post('/v1/contracts/:id/release', async (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.status === 'released') return res.status(409).json({ error: 'already_released' });
+
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+
+  contract.status = 'released';
+  contract.released_at = new Date().toISOString();
+
+  let voidedPeriods = 0;
+  for (const [periodId, period] of db.payPeriods.entries()) {
+    if (period.contract_id === contract.contract_id && !period.paid_at) {
+      db.payPeriods.delete(periodId);
+      voidedPeriods++;
+    }
+  }
+
+  if (talent) talent.status = 'available';
+
+  await saveState();
+  res.json({ contract, talent_status: talent?.status || null, voided_pay_periods: voidedPeriods });
 });
 
 // GET /v1/contracts/:id/w8ben — downloads the REAL signed PDF from Dropbox
