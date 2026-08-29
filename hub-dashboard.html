@@ -29,6 +29,10 @@
   .tabbar{display:flex; flex-direction:column; gap:2px; padding:20px 12px; border-right:1px solid var(--border); background:var(--bg-surface); width:210px; flex-shrink:0; min-height:calc(100vh - 61px); box-sizing:border-box;}
   .tabbtn{background:none; border:none; border-left:2px solid transparent; border-radius:6px; padding:11px 14px; color:var(--text-muted); font-size:13px; text-align:left; width:100%;}
   .tabbtn.active{color:var(--text); background:var(--bg-raised); border-left-color:var(--amber);}
+  .subtabbtn{background:none; border:none; border-bottom:2px solid transparent; border-radius:0; padding:8px 4px; margin-right:22px; color:var(--text-muted); font-size:13px; font-family:'IBM Plex Mono',monospace;}
+  .subtabbtn.active{color:var(--text); border-bottom-color:var(--amber);}
+  .subpanel{display:none;}
+  .subpanel.active{display:block;}
   main{padding:28px; max-width:1000px; flex:1; min-width:0;}
   .panel{display:none;}
   .panel.active{display:block;}
@@ -183,52 +187,54 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
   <section class="panel" id="panel-simulate">
     <div class="panel-head"><h2>Simulate an Enterprise</h2><p class="sub">Walk through exactly what an enterprise partnering with YOUR hub would experience — real API calls, under your own pipeline and markup. Doubles as your own sandbox to verify your setup once you're live.</p></div>
 
-    <div class="card" style="margin-bottom:20px;">
-      <h3 style="font-size:15px; margin-bottom:14px;">Step 1 — Engage a talent from your roster</h3>
-      <div class="form-grid">
-        <div class="field"><label>Talent</label><select id="simTalent"><option value="">Select a talent…</option></select></div>
-        <div class="field"><label>Employer / company name</label><input id="simEmployer" placeholder="e.g. Acme Corp" value="Acme Corp"></div>
-        <div class="field"><label>Role title</label><input id="simRole" placeholder="e.g. Backend Engineer" value="Backend Engineer"></div>
-        <div class="field"><label>Coverage plan</label><select id="simPlan"><option value="">Select a plan…</option></select></div>
-        <div class="field"><label>Coverage duration (renewal cycle)</label>
-          <select id="simDuration">
-            <option value="1">1 month — insurance renews every payment</option>
-            <option value="3">3 months — renews every 3rd payment</option>
-            <option value="6">6 months — renews every 6th payment</option>
-            <option value="12" selected>12 months — renews on the 13th payment (year 2)</option>
-          </select>
+    <div class="tabbar" style="flex-direction:row; width:auto; min-height:0; border:none; padding:0; margin-bottom:20px; background:none;">
+      <button class="subtabbtn active" data-subpanel="engage">Engage</button>
+      <button class="subtabbtn" data-subpanel="engagements">Engagements</button>
+      <button class="subtabbtn" data-subpanel="simcontracts">Contracts</button>
+    </div>
+
+    <div class="subpanel active" id="subpanel-engage">
+      <div class="card" style="margin-bottom:20px;">
+        <h3 style="font-size:15px; margin-bottom:14px;">Engage a talent from your roster</h3>
+        <div class="form-grid">
+          <div class="field"><label>Talent</label><select id="simTalent"><option value="">Select a talent…</option></select></div>
+          <div class="field"><label>Employer / company name</label><input id="simEmployer" placeholder="e.g. Acme Corp" value="Acme Corp"></div>
+          <div class="field"><label>Role title</label><input id="simRole" placeholder="e.g. Backend Engineer" value="Backend Engineer"></div>
+          <div class="field"><label>Coverage plan</label><select id="simPlan"><option value="">Select a plan…</option></select></div>
+          <div class="field"><label>Coverage duration (renewal cycle)</label>
+            <select id="simDuration">
+              <option value="1">1 month — insurance renews every payment</option>
+              <option value="3">3 months — renews every 3rd payment</option>
+              <option value="6">6 months — renews every 6th payment</option>
+              <option value="12" selected>12 months — renews on the 13th payment (year 2)</option>
+            </select>
+          </div>
+          <div class="field"><label>Monthly salary (₦)</label><input id="simSalary" type="number" placeholder="e.g. 500000"></div>
+          <div class="field"><label>Interview link</label><input id="simInterviewLink" value="https://calendly.com/example/interview"></div>
         </div>
-        <div class="field"><label>Monthly salary (₦)</label><input id="simSalary" type="number" placeholder="e.g. 500000"></div>
-        <div class="field"><label>Interview link</label><input id="simInterviewLink" value="https://calendly.com/example/interview"></div>
+        <div class="field"><label>KPIs (required, one per line)</label><textarea id="simKpis" rows="3" required placeholder="Ship the payments redesign by Q1&#10;Maintain 99.9% uptime" style="width:100%;"></textarea></div>
+        <div id="simPlanDetails" style="display:none; margin:-4px 0 16px;"></div>
+        <button class="btn-primary" id="simEngageBtn">Send interview invite</button>
+        <div id="simEngageResult" style="margin-top:12px;"></div>
       </div>
-      <div class="field"><label>KPIs (required, one per line)</label><textarea id="simKpis" rows="3" required placeholder="Ship the payments redesign by Q1&#10;Maintain 99.9% uptime" style="width:100%;"></textarea></div>
-      <div id="simPlanDetails" style="display:none; margin:-4px 0 16px;"></div>
-      <button class="btn-primary" id="simEngageBtn">Send interview invite</button>
-      <div id="simEngageResult" style="margin-top:12px;"></div>
     </div>
 
-    <div class="card" style="margin-bottom:20px; display:none;" id="simStep2Card">
-      <h3 style="font-size:15px; margin-bottom:10px;">Step 2 — Talent responds, contract gets sent</h3>
-      <button class="btn-teal" id="simAcceptInterviewBtn">Simulate: talent accepts interview invite</button>
-      <button class="btn-primary" id="simSendContractBtn" style="display:none; margin-left:8px;">Send contract</button>
-      <div id="simStep2Result" style="margin-top:12px;"></div>
+    <div class="subpanel" id="subpanel-engagements">
+      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">GET /v1/engagements — every engagement you've sent, real and persisted. Refreshing the page never loses this; it's not held in browser memory.</p>
+      <button class="row-btn" id="refreshSimEngagementsBtn" style="margin-bottom:14px;">↻ Refresh</button>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Talent</th><th>Interview link</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="simEngagementsTableBody"><tr><td colspan="4" class="empty-state">// connect to load</td></tr></tbody></table>
+      </div>
     </div>
 
-    <div class="card" style="margin-bottom:20px; display:none;" id="simStep3Card">
-      <h3 style="font-size:15px; margin-bottom:10px;">Step 3 — Talent accepts the contract</h3>
-      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">Opens the REAL acceptance page in a new tab — the same one a real talent would land on from their email, including the KYC form if any details are still missing.</p>
-      <button class="btn-teal" id="simOpenAcceptBtn">Open contract acceptance page →</button>
-      <button class="row-btn" id="simCheckStatusBtn" style="margin-left:8px;">↻ Check status</button>
-      <div id="simStep3Result" style="margin-top:12px;"></div>
-    </div>
-
-    <div class="card" style="display:none;" id="simStep4Card">
-      <h3 style="font-size:15px; margin-bottom:10px;">Step 4 — Enterprise pays</h3>
-      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">This is the real thing an enterprise would do — wire the total shown on the Plans calculator to the account below. For this simulation, click below instead of a real bank transfer (test mode only).</p>
-      <div id="simAccountInfo" style="margin-bottom:12px;"></div>
-      <button class="btn-primary" id="simDepositBtn">Simulate: we wired the money</button>
-      <button class="row-btn" id="simRefreshFinalBtn" style="margin-left:8px;">↻ Refresh result</button>
-      <div id="simStep4Result" style="margin-top:12px;"></div>
+    <div class="subpanel" id="subpanel-simcontracts">
+      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">GET /v1/contracts — same idea. Once a talent accepts a contract, their NGN account and next steps show up here, live from the server.</p>
+      <button class="row-btn" id="refreshSimContractsBtn" style="margin-bottom:14px;">↻ Refresh</button>
+      <div class="tbl-wrap">
+        <table><thead><tr><th>Contract</th><th>Talent</th><th>Amount</th><th>Status</th><th>NGN account / insurance</th><th>Action</th></tr></thead>
+        <tbody id="simContractsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
+      </div>
     </div>
   </section>
 </main>
@@ -283,6 +289,7 @@ document.getElementById('connectBtn').onclick = async function(){
     showToast('Connected');
     loadStats(); loadTalents(); loadMarkupPanel();
     loadPlans().then(populateSimDropdowns);
+    renderSimEngagements(); renderSimContracts();
   }catch(err){
     connected = false;
     document.getElementById('connDot').classList.remove('on');
@@ -486,12 +493,22 @@ document.getElementById('calcBtn').onclick = async function(){
   `;
 };
 
-/* SIMULATE AN ENTERPRISE — a real, end-to-end walkthrough under this hub's
- * own pipeline and markup. State is held in these variables as the human
- * clicks through each real step, same shape as console.html's own
- * simulate-talent-action buttons, just packaged for a hub-facing context. */
-let simEngagementId = null, simEngagementToken = null;
-let simContractId = null, simContractToken = null;
+/* SIMULATE AN ENTERPRISE — mirrors console.html's own structure exactly:
+ * separate sub-tabs, each rendering REAL data fetched fresh from the
+ * server every time, not state held in browser memory. Refreshing the
+ * page never loses anything — an engagement or contract that already
+ * exists on the server is still there, and its current status is what
+ * decides which action button shows, not a client-side flag. */
+document.querySelectorAll('.subtabbtn').forEach(btn=>{
+  btn.addEventListener('click', function(){
+    document.querySelectorAll('.subtabbtn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.subpanel').forEach(p=>p.classList.remove('active'));
+    this.classList.add('active');
+    document.getElementById('subpanel-' + this.dataset.subpanel).classList.add('active');
+    if(this.dataset.subpanel === 'engagements') renderSimEngagements();
+    if(this.dataset.subpanel === 'simcontracts') renderSimContracts();
+  });
+});
 
 function populateSimDropdowns(){
   if(!connected) return;
@@ -545,77 +562,111 @@ document.getElementById('simEngageBtn').onclick = async function(){
       employer_country: 'NG', employer_currency: 'NGN',
       coverage_months, proposed_amount, interview_link, kpis,
     })});
-    simEngagementId = eng.engagement_id;
-    simEngagementToken = eng.accept_token;
-    document.getElementById('simEngageResult').innerHTML = `<span style="color:var(--teal);font-size:12.5px;">Interview invite sent — engagement ${eng.engagement_id}</span>`;
-    document.getElementById('simStep2Card').style.display = 'block';
+    document.getElementById('simEngageResult').innerHTML = `<span style="color:var(--teal);font-size:12.5px;">Interview invite sent — engagement ${eng.engagement_id}. Switch to the Engagements tab to continue — it's saved on the server now, refreshing this page won't lose it.</span>`;
     showToast('Engagement created');
+    document.getElementById('simSalary').value = '';
+    document.getElementById('simKpis').value = '';
   }catch(err){ showToast('Failed: ' + err.message, true); }
 };
 
-document.getElementById('simAcceptInterviewBtn').onclick = async function(){
+/* ENGAGEMENTS sub-tab — exact same pattern as console.html's renderEngagements */
+async function renderSimEngagements(){
+  if(!connected) return;
   try{
-    await fetch(`${BASE_URL}/v1/engagements/${simEngagementId}/accept?token=${simEngagementToken}`).then(r=>r.text());
-    document.getElementById('simStep2Result').innerHTML = '<span style="color:var(--teal);font-size:12.5px;">Talent accepted the interview — ready to send contract</span>';
-    document.getElementById('simSendContractBtn').style.display = 'inline-block';
-    showToast('Interview accepted (simulated)');
-  }catch(err){ showToast('Failed: ' + err.message, true); }
-};
+    const data = await api('/v1/engagements');
+    const tbody = document.getElementById('simEngagementsTableBody');
+    const rows = data.results.slice().reverse();
+    tbody.innerHTML = rows.length ? rows.map(e=>{
+      let actionCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      if(e.status === 'interview_invited'){
+        actionCell = `<button class="btn-teal" onclick="simAcceptInterview('${e.engagement_id}','${e.accept_token}')">Simulate: talent accepts interview</button>`;
+      } else if(e.status === 'interview_accepted'){
+        actionCell = `<button class="btn-teal" onclick="simSendContract('${e.engagement_id}')">Send Contract</button>`;
+      }
+      return `<tr><td>${e.talent_name}</td>
+        <td><a href="${e.interview_link}" target="_blank" style="color:var(--teal);font-size:11px;">${e.interview_link.slice(0,40)}...</a></td>
+        <td><span class="status-pill status-${e.status}">${e.status}</span></td>
+        <td>${actionCell}</td></tr>`;
+    }).join('') : '<tr><td colspan="4" class="empty-state">// no engagements yet — start from the Engage tab</td></tr>';
+  }catch(err){ showToast('Failed to load engagements: ' + err.message, true); }
+}
+document.getElementById('refreshSimEngagementsBtn').onclick = renderSimEngagements;
 
-document.getElementById('simSendContractBtn').onclick = async function(){
+window.simAcceptInterview = async function(engagementId, token){
   try{
-    const contract = await api(`/v1/engagements/${simEngagementId}/contract`, { method:'POST' });
-    simContractId = contract.contract_id;
-    simContractToken = contract.accept_token;
-    document.getElementById('simStep2Result').innerHTML += `<br><span style="color:var(--teal);font-size:12.5px;">Contract sent — ${contract.contract_id}</span>`;
-    document.getElementById('simStep3Card').style.display = 'block';
-    showToast('Contract sent');
+    await fetch(`${BASE_URL}/v1/engagements/${engagementId}/accept?token=${token}`).then(r=>r.text());
+    showToast('Interview accepted (simulated as the talent)');
+    renderSimEngagements();
   }catch(err){ showToast('Failed: ' + err.message, true); }
 };
 
-document.getElementById('simOpenAcceptBtn').onclick = function(){
-  // Opened in a new tab rather than fetched via JS — this page may be a
-  // real KYC form (HTML, not JSON) if any details are still missing for
-  // this talent, and letting the actual browser render it is both more
-  // robust and a more honest simulation of what a real talent sees.
-  window.open(`${BASE_URL}/v1/contracts/${simContractId}/accept?token=${simContractToken}`, '_blank');
+window.simSendContract = async function(engagementId){
+  try{
+    await api(`/v1/engagements/${engagementId}/contract`, { method:'POST' });
+    showToast('Contract sent to talent');
+    renderSimEngagements();
+  }catch(err){ showToast('Failed to send contract: ' + err.message, true); }
 };
 
-async function checkSimContractStatus(){
+/* CONTRACTS sub-tab — same idea, scoped to this hub's own contracts */
+async function renderSimContracts(){
+  if(!connected) return;
   try{
     const data = await api('/v1/contracts');
-    const c = data.results.find(x => x.contract_id === simContractId);
-    if(!c) return null;
-    document.getElementById('simStep3Result').innerHTML = `<span class="mono" style="font-size:12px;color:var(--text-muted);">status: ${c.status}</span>`;
-    if(c.status === 'active'){
-      document.getElementById('simStep4Card').style.display = 'block';
-      document.getElementById('simAccountInfo').innerHTML = c.ngn_status === 'onboarded'
-        ? `<span class="mono" style="font-size:12.5px;color:var(--purple);">${c.ngn_account_number} — ${c.ngn_bank_name}</span>`
-        : `<span style="color:var(--red);font-size:12.5px;">${c.ngn_status || 'not onboarded yet'}${c.ngn_note ? ': '+c.ngn_note : ''}</span>`;
-    }
-    return c;
-  }catch(err){ showToast('Failed to check status: ' + err.message, true); return null; }
-}
-document.getElementById('simCheckStatusBtn').onclick = checkSimContractStatus;
-
-document.getElementById('simDepositBtn').onclick = async function(){
-  const c = await checkSimContractStatus();
-  const amount = c?.proposed_amount || parseFloat(document.getElementById('simSalary').value) || 0;
-  try{
-    await api(`/v1/contracts/${simContractId}/simulate-deposit`, { method:'POST', body: JSON.stringify({ amount_naira: amount }) });
-    showToast('Wired — settling now, refresh in a few seconds');
-    setTimeout(async ()=>{
-      const updated = await checkSimContractStatus();
-      if(updated){
-        document.getElementById('simStep4Result').innerHTML = `
-          <div style="font-size:12.5px;">
-            Insurance: <span style="color:${updated.coverage_status==='active'?'var(--teal)':'var(--red)'};">${updated.coverage_status||'—'}</span><br>
-            Settlement: <span style="color:${updated.ngn_settlement_status==='settled'?'var(--teal)':'var(--red)'};">${updated.ngn_settlement_status||'—'}</span>
-          </div>`;
-        loadStats();
+    const tbody = document.getElementById('simContractsTableBody');
+    const rows = data.results.slice().reverse();
+    tbody.innerHTML = rows.length ? rows.map(c=>{
+      let ngnCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      if(c.ngn_status === 'onboarded'){
+        ngnCell = `<span class="mono" style="font-size:11px;color:var(--purple);">${c.ngn_account_number}<br>${c.ngn_bank_name}</span>`;
+      } else if(c.ngn_status){
+        ngnCell = `<span style="color:var(--red);font-size:11px;">${c.ngn_status}${c.ngn_note ? ': '+c.ngn_note : ''}</span>`;
       }
-    }, 4000);
-  }catch(err){ showToast('Failed: ' + err.message, true); }
+      if(c.coverage_status === 'active'){
+        ngnCell += `<br><span style="color:var(--teal);font-size:11px;">insurance: ${c.coverage_policy_id||'active'}</span>`;
+      }
+
+      let actionCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+      if(c.status === 'pending_talent_signature'){
+        actionCell = `<button class="btn-teal" onclick="window.open('${BASE_URL}/v1/contracts/${c.contract_id}/accept?token=${c.accept_token}','_blank')">Open acceptance page →</button>`;
+      } else if(c.status === 'active' && c.ngn_status === 'onboarded'){
+        actionCell = `<button class="btn-primary" style="padding:5px 11px;font-size:11.5px;" onclick="simDeposit('${c.contract_id}', ${c.proposed_amount||0})">Simulate deposit</button>`
+          + `<br><button class="row-btn" style="margin-top:4px;color:var(--red);border-color:var(--red);" onclick="simRelease('${c.contract_id}','${c.talent_name.replace(/'/g,"\\'")}')">Release</button>`;
+      } else if(c.status === 'active'){
+        actionCell = `<button class="row-btn" style="color:var(--red);border-color:var(--red);" onclick="simRelease('${c.contract_id}','${c.talent_name.replace(/'/g,"\\'")}')">Release</button>`;
+      } else if(c.status === 'released'){
+        actionCell = '<span style="color:var(--text-faint);font-size:11px;">released</span>';
+      }
+
+      return `<tr><td class="mono" style="font-size:11px;">${c.contract_id}</td><td>${c.talent_name}</td>
+        <td class="mono">${c.proposed_amount ? c.proposed_amount + ' ' + c.employer_currency : '-'}</td>
+        <td><span class="status-pill status-${c.status}">${c.status}</span></td>
+        <td>${ngnCell}</td>
+        <td>${actionCell}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="empty-state">// no contracts yet — send one from the Engagements tab</td></tr>';
+  }catch(err){ showToast('Failed to load contracts: ' + err.message, true); }
+}
+document.getElementById('refreshSimContractsBtn').onclick = renderSimContracts;
+
+window.simDeposit = async function(contractId, defaultAmount){
+  const amountStr = prompt('Amount to simulate wiring (₦), test mode only:', defaultAmount || 300000);
+  if(!amountStr) return;
+  const amount_naira = parseFloat(amountStr);
+  if(isNaN(amount_naira) || amount_naira <= 0){ showToast('Enter a valid amount', true); return; }
+  try{
+    await api(`/v1/contracts/${contractId}/simulate-deposit`, { method:'POST', body: JSON.stringify({ amount_naira }) });
+    showToast('Wired — Felicity is delivering the real webhook now, refreshing shortly');
+    setTimeout(renderSimContracts, 4000);
+  }catch(err){ showToast('Simulate deposit failed: ' + err.message, true); }
+};
+
+window.simRelease = async function(contractId, talentName){
+  if(!confirm(`Release ${talentName}? This ends the contract and makes them available to hire again.`)) return;
+  try{
+    await api(`/v1/contracts/${contractId}/release`, { method:'POST' });
+    showToast(talentName + ' released — available again');
+    renderSimContracts(); loadTalents(); loadStats();
+  }catch(err){ showToast('Failed to release: ' + err.message, true); }
 };
 </script>
 </body>
