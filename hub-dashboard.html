@@ -201,6 +201,7 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
         <div class="field"><label>Monthly salary (₦)</label><input id="simSalary" type="number" placeholder="e.g. 500000"></div>
         <div class="field"><label>Interview link</label><input id="simInterviewLink" value="https://calendly.com/example/interview"></div>
       </div>
+      <div class="field"><label>KPIs (required, one per line)</label><textarea id="simKpis" rows="3" required placeholder="Ship the payments redesign by Q1&#10;Maintain 99.9% uptime" style="width:100%;"></textarea></div>
       <div id="simPlanDetails" style="display:none; margin:-4px 0 16px;"></div>
       <button class="btn-primary" id="simEngageBtn">Send interview invite</button>
       <div id="simEngageResult" style="margin-top:12px;"></div>
@@ -529,17 +530,20 @@ document.getElementById('simEngageBtn').onclick = async function(){
   const coverage_months = parseInt(document.getElementById('simDuration').value) || 12;
   const proposed_amount = parseFloat(document.getElementById('simSalary').value);
   const interview_link = document.getElementById('simInterviewLink').value.trim();
+  const kpisRaw = document.getElementById('simKpis').value.trim();
+  const kpis = kpisRaw ? kpisRaw.split('\n').map(k=>k.trim()).filter(Boolean) : [];
 
   if(!talent_id){ showToast('Select a talent', true); return; }
   if(!employer_name || !role_title){ showToast('Employer name and role are required', true); return; }
   if(!coverage_plan){ showToast('Select a coverage plan', true); return; }
   if(!proposed_amount || proposed_amount <= 0){ showToast('Enter a valid salary', true); return; }
+  if(!kpis.length){ showToast('At least one KPI is required — every job comes with one', true); return; }
 
   try{
     const eng = await api('/v1/engagements/create', { method:'POST', body: JSON.stringify({
       talent_id, employer_name, role_title, coverage_plan,
       employer_country: 'NG', employer_currency: 'NGN',
-      coverage_months, proposed_amount, interview_link,
+      coverage_months, proposed_amount, interview_link, kpis,
     })});
     simEngagementId = eng.engagement_id;
     simEngagementToken = eng.accept_token;

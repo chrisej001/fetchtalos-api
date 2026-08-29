@@ -249,7 +249,7 @@
     <div class="field"><label>Proposed monthly amount</label><input id="proposedAmount" type="number" placeholder="e.g. 2400"></div>
     <div class="field"><label>Interview link (Calendly, Zoom, Meet - your choice)</label><input id="interviewLink" placeholder="https://calendly.com/you/interview" value="https://calendly.com/acme-corp/interview"></div>
     <div class="field"><label>Proposed time (optional, freeform)</label><input id="proposedTime" placeholder="e.g. Thursday 3pm WAT"></div>
-    <div class="field"><label>KPIs (optional, one per line)</label><textarea id="kpisInput" rows="3" placeholder="Ship the payments redesign by Q1&#10;Maintain 99.9% uptime" style="width:100%; background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:8px 11px; border-radius:7px; font-size:12.5px; font-family:'Inter',sans-serif; resize:vertical;"></textarea></div>
+    <div class="field"><label>KPIs (required, one per line)</label><textarea id="kpisInput" rows="3" required placeholder="Ship the payments redesign by Q1&#10;Maintain 99.9% uptime" style="width:100%; background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:8px 11px; border-radius:7px; font-size:12.5px; font-family:'Inter',sans-serif; resize:vertical;"></textarea></div>
     <div class="modal-actions">
       <button class="btn-primary" id="sendEngageBtn">Send interview invite</button>
       <button class="btn-secondary" id="cancelEngageBtn">Cancel</button>
@@ -355,7 +355,8 @@ document.getElementById('sendEngageBtn').onclick = function(){
   if(!employer_name){ showToast('Employer / company name is required', true); return; }
   if(!role_title){ showToast('Role title is required', true); return; }
   var kpisRaw = document.getElementById('kpisInput').value.trim();
-  var kpis = kpisRaw ? kpisRaw.split('\n').map(function(k){ return k.trim(); }).filter(Boolean) : null;
+  var kpis = kpisRaw ? kpisRaw.split('\n').map(function(k){ return k.trim(); }).filter(Boolean) : [];
+  if(!kpis.length){ showToast('At least one KPI is required — every job comes with one', true); return; }
   api('/v1/engagements/create', { method:'POST', body: JSON.stringify({
     talent_id: pendingTalentId,
     employer_name: employer_name,

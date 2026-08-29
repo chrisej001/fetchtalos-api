@@ -2334,6 +2334,9 @@ app.post('/v1/engagements/create', async (req, res) => {
   if (!interview_link) return res.status(400).json({ error: 'interview_link is required — a Calendly/Zoom/Meet link, whatever the enterprise uses' });
   if (!employer_name) return res.status(400).json({ error: 'employer_name is required — this is the company name that will appear on the offer letter' });
   if (!role_title) return res.status(400).json({ error: 'role_title is required — e.g. "Backend Engineer"' });
+  if (!Array.isArray(kpis) || kpis.filter(k => k && k.trim()).length === 0) {
+    return res.status(400).json({ error: 'kpis_required', message: 'Every engagement needs at least one KPI — pass kpis as a non-empty array of strings.' });
+  }
 
   const talent = db.talents.find(t => t.talent_id === talent_id);
   if (!talent) return res.status(404).json({ error: 'talent_not_found' });
