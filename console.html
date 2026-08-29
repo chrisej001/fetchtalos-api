@@ -167,8 +167,8 @@
       <div class="panel-head"><h2>Contracts</h2><p class="sub">GET /v1/contracts &mdash; wire instructions column shows the REAL salary account, once issued</p></div>
       <button class="row-btn" id="refreshContractsBtn" style="margin-bottom:14px;">Refresh</button>
       <div class="tbl-wrap">
-        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th>Salary account / NGN account</th><th>Insurance / policy</th><th>W-8BEN</th></tr></thead>
-        <tbody id="contractsTableBody"><tr><td colspan="7" class="empty-state">// connect to load</td></tr></tbody></table>
+        <table><thead><tr><th>Contract ID</th><th>Talent</th><th>Amount</th><th>Status</th><th>Salary account / NGN account</th><th>Insurance / policy</th><th>W-8BEN</th><th>Actions</th></tr></thead>
+        <tbody id="contractsTableBody"><tr><td colspan="8" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
 
@@ -459,16 +459,29 @@ function renderContracts(){
         w8benCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
       }
 
+      var actionCell = (c.status === 'active' || c.status === 'pending_talent_signature')
+        ? '<button class="row-btn" onclick="releaseContract(\''+c.contract_id+'\',\''+c.talent_name.replace(/'/g,"\\'")+'\')" style="color:var(--red);border-color:var(--red);">Release</button>'
+        : (c.status === 'released' ? '<span style="color:var(--text-faint);font-size:11px;">released</span>' : '');
+
       return '<tr><td class="mono">'+c.contract_id+'</td><td>'+c.talent_name+'</td>'
         + '<td class="mono">'+(c.proposed_amount ? c.proposed_amount + ' ' + c.employer_currency : '-')+'</td>'
         + '<td><span class="status-pill status-'+c.status+'">'+c.status+'</span></td>'
         + '<td>'+lastCell+'</td>'
         + '<td>'+insuranceCell+'</td>'
-        + '<td>'+w8benCell+'</td></tr>';
-    }).join('') : '<tr><td colspan="7" class="empty-state">// no contracts yet - send one from Engagements</td></tr>';
+        + '<td>'+w8benCell+'</td>'
+        + '<td>'+actionCell+'</td></tr>';
+    }).join('') : '<tr><td colspan="8" class="empty-state">// no contracts yet - send one from Engagements</td></tr>';
   }).catch(function(err){ showToast('Failed to load contracts: ' + err.message, true); });
 }
 document.getElementById('refreshContractsBtn').onclick = renderContracts;
+
+function releaseContract(contractId, talentName){
+  if(!confirm('Release '+talentName+'? This ends the contract, cancels any unpaid future pay periods, and makes them available to hire again. This cannot be undone.')) return;
+  api('/v1/contracts/' + contractId + '/release', { method:'POST' }).then(function(){
+    showToast(talentName + ' released — available again');
+    renderContracts(); renderTalent();
+  }).catch(function(err){ showToast('Failed to release: ' + err.message, true); });
+}
 
 function downloadW8Ben(contractId, talentName){
   fetch(BASE_URL + '/v1/contracts/' + contractId + '/w8ben', { headers: { Authorization: 'Bearer ' + API_KEY } })

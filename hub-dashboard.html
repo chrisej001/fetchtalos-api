@@ -127,7 +127,7 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
 
     <button class="row-btn" id="refreshTalentsBtn" style="margin-bottom:14px;">↻ Refresh</button>
     <div class="tbl-wrap">
-      <table><thead><tr><th>Name</th><th>Email</th><th>Stack</th><th>Country</th><th>Score</th><th>Status</th></tr></thead>
+      <table><thead><tr><th>Name</th><th>Email</th><th>Stack</th><th>Country</th><th>Score</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody id="talentsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
     </div>
   </section>
@@ -316,11 +316,21 @@ async function loadTalents(){
       <tr><td><strong>${t.name}</strong></td><td>${t.email}</td>
       <td class="mono" style="font-size:12px;">${(t.stack||[]).join(', ')}</td>
       <td>${t.country}</td><td>${t.vetted_score}</td>
-      <td class="mono" style="font-size:12px;">${t.status}</td></tr>`).join('')
-      : '<tr><td colspan="6" class="empty-state">// no talents uploaded yet</td></tr>';
+      <td class="mono" style="font-size:12px;">${t.status}</td>
+      <td><button class="row-btn" onclick="deleteTalent('${t.talent_id}','${t.name.replace(/'/g,"\\'")}')" style="color:var(--red);border-color:var(--red);">Delete</button></td></tr>`).join('')
+      : '<tr><td colspan="7" class="empty-state">// no talents uploaded yet</td></tr>';
   }catch(err){ showToast('Failed to load roster: ' + err.message, true); }
 }
 document.getElementById('refreshTalentsBtn').onclick = loadTalents;
+
+window.deleteTalent = async function(talentId, name){
+  if(!confirm(`Delete ${name} from your roster? This can't be undone. (Blocked automatically if they have a pending or active contract — the enterprise needs to release it first.)`)) return;
+  try{
+    await api('/v1/talents/' + talentId, { method:'DELETE' });
+    showToast(name + ' deleted');
+    loadTalents(); loadStats();
+  }catch(err){ showToast('Failed to delete: ' + err.message, true); }
+};
 
 document.getElementById('addTalentBtn').onclick = async function(){
   const name = document.getElementById('tName').value.trim();

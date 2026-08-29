@@ -172,7 +172,7 @@
       <div class="panel-head" style="margin-top:34px;"><h2>Full talent pool</h2><p class="sub">GET /admin/talents — unfiltered, includes engaged</p></div>
       <button class="row-btn" id="refreshTalentsBtn" style="margin-bottom:14px;">↻ Refresh</button>
       <div class="tbl-wrap">
-        <table><thead><tr><th>Talent</th><th>Email</th><th>Stack</th><th>Pipeline</th><th>Country</th><th>Score</th><th>Status</th></tr></thead>
+        <table><thead><tr><th>Talent</th><th>Email</th><th>Stack</th><th>Pipeline</th><th>Country</th><th>Score</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="talentsTableBody"><tr><td colspan="7" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
@@ -371,11 +371,21 @@ async function loadTalents(){
       <td style="color:var(--text-muted);">${t.pipeline}</td>
       <td class="mono">${t.country}</td>
       <td class="mono">${t.vetted_score}</td>
-      <td><span class="status-pill status-${t.status}">${t.status}</span></td></tr>`).join('')
-      : `<tr><td colspan="7" class="empty-state">// no talent yet</td></tr>`;
+      <td><span class="status-pill status-${t.status}">${t.status}</span></td>
+      <td><button class="row-btn" onclick="deleteTalent('${t.talent_id}','${t.name.replace(/'/g,"\\'")}')" style="color:var(--red);border-color:var(--red);">Delete</button></td></tr>`).join('')
+      : `<tr><td colspan="8" class="empty-state">// no talent yet</td></tr>`;
   }catch(err){ showToast('Failed to load talents: ' + err.message, true); }
 }
 document.getElementById('refreshTalentsBtn').onclick = loadTalents;
+
+window.deleteTalent = async function(talentId, name){
+  if(!confirm(`Delete ${name}? This can't be undone. (Blocked automatically if they have a pending or active contract — release it first.)`)) return;
+  try{
+    await api('/admin/talents/' + talentId, { method:'DELETE' });
+    showToast(name + ' deleted');
+    loadTalents();
+  }catch(err){ showToast('Failed to delete: ' + err.message, true); }
+};
 
 document.getElementById('addTalentBtn').onclick = async ()=>{
   const name = document.getElementById('talentName').value.trim();
