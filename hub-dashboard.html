@@ -157,6 +157,14 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
       <button class="btn-primary" id="saveSettleBtn">Save settlement account</button>
       <div id="settleResult" style="margin-top:10px;"></div>
     </div>
+
+    <div class="card" style="margin-top:20px;">
+      <h3 style="font-size:15px;">Payment notifications</h3>
+      <p style="font-size:12.5px; color:var(--text-muted); margin:8px 0 16px;">Every time a talent under your pipeline gets paid, we'll email this address how much they received and how much of your markup was settled to you. Without this set, you won't be notified at all.</p>
+      <div class="field" style="max-width:340px;"><label>Notification email</label><input id="notifyEmail" type="email" placeholder="e.g. team@yourhub.com"></div>
+      <button class="btn-primary" id="saveNotifyEmailBtn">Save notification email</button>
+      <div id="notifyEmailResult" style="margin-top:10px;"></div>
+    </div>
   </section>
 
   <section class="panel" id="panel-plans">
@@ -400,6 +408,9 @@ function loadMarkupPanel(){
     document.getElementById('settleName').value = hubAccount.hub_settlement_account.account_name || '';
     document.getElementById('settleBank').value = hubAccount.hub_settlement_account.bank_code || '';
   }
+  if(hubAccount.hub_notification_email){
+    document.getElementById('notifyEmail').value = hubAccount.hub_notification_email;
+  }
 }
 
 document.getElementById('saveMarkupBtn').onclick = async function(){
@@ -422,6 +433,17 @@ document.getElementById('saveSettleBtn').onclick = async function(){
     await api('/v1/hub/settlement-account', { method:'PATCH', body: JSON.stringify({ account_number, account_name, bank_code }) });
     document.getElementById('settleResult').innerHTML = '<span style="color:var(--teal);font-size:12.5px;">Saved</span>';
     showToast('Settlement account updated');
+  }catch(err){ showToast('Failed: ' + err.message, true); }
+};
+
+document.getElementById('saveNotifyEmailBtn').onclick = async function(){
+  const email = document.getElementById('notifyEmail').value.trim();
+  if(!email || !email.includes('@')){ showToast('Enter a valid email', true); return; }
+  try{
+    await api('/v1/hub/notification-email', { method:'PATCH', body: JSON.stringify({ email }) });
+    hubAccount.hub_notification_email = email;
+    document.getElementById('notifyEmailResult').innerHTML = '<span style="color:var(--teal);font-size:12.5px;">Saved</span>';
+    showToast('Notification email updated');
   }catch(err){ showToast('Failed: ' + err.message, true); }
 };
 

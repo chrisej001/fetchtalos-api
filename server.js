@@ -1023,6 +1023,32 @@ async function estimateInsuranceForDisplay(contract) {
 }
 
 /**
+ * Notifies a hub every time one of THEIR talents gets paid — how much the
+ * talent received, and how much of it was the hub's own markup. This is
+ * generic by design: it reads whichever hub the talent's pipeline maps
+ * to, with no hardcoding to any specific hub, so every hub onboarded on
+ * the dashboard gets this automatically, not just the first one built
+ * against. Called from settleNgnPayment, wrapped in a try/catch there —
+ * a failure to notify the hub must never undo or block a real, already-
+ * completed payment settlement.
+ */
+async function sendHubPaymentNotificationEmail(contract, talent, hubKeyRecord, talentAmountNaira, hubMarkupNaira) {
+  if (!hubKeyRecord?.hub_notification_email) return { sent: false, reason: 'hub_no_notification_email' };
+  return sendEmail({
+    to: hubKeyRecord.hub_notification_email,
+    subject: `${talent.name} was paid — ₦${hubMarkupNaira.toLocaleString()} markup settled to you`,
+    html: `<p>Hi,</p>
+      <p><b>${talent.name}</b> (${contract.role_title || 'contractor'} at ${contract.employer_name}) was just paid through your pipeline.</p>
+      <ul>
+        <li><b>Talent received:</b> ₦${talentAmountNaira.toLocaleString()}</li>
+        <li><b>Your markup earned this cycle:</b> ₦${hubMarkupNaira.toLocaleString()}</li>
+      </ul>
+      <p>Your markup has been sent to the settlement account on file. See your full earnings history any time on your dashboard's Overview tab.</p>
+      <p>— FetchTalos</p>`
+  });
+}
+
+/**
  * The reminder email — sent to employer_email (the HR/finance contact
  * captured at Engage time, not the talent), with the exact amount due
  * for the upcoming cycle. This is the piece that makes the "check the
@@ -1121,14 +1147,14 @@ function computeAmountDueThisCycle(contract, talent) {
   const hubMarkupNaira = hubMarkupBps > 0 ? +(salaryNaira * hubMarkupBps / 10000).toFixed(2) : 0;
   const hubSettlement = hubKeyRecord?.hub_settlement_account || null;
 
-  return { alreadyPaidCount, cycleMonths, isInsuranceRenewalDue, salaryNaira, platformFeeNaira, hubMarkupBps, hubMarkupNaira, hubSettlement };
+  return { alreadyPaidCount, cycleMonths, isInsuranceRenewalDue, salaryNaira, platformFeeNaira, hubMarkupBps, hubMarkupNaira, hubSettlement, hubKeyRecord };
 }
 
 async function settleNgnPayment(contract) {
   const talent = db.talents.find(t => t.talent_id === contract.talent_id);
   if (!talent) return { ngn_settlement_note: 'talent_not_found' };
 
-  const { isInsuranceRenewalDue, salaryNaira, platformFeeNaira, hubMarkupBps, hubMarkupNaira, hubSettlement } = computeAmountDueThisCycle(contract, talent);
+  const { isInsuranceRenewalDue, salaryNaira, platformFeeNaira, hubMarkupBps, hubMarkupNaira, hubSettlement, hubKeyRecord } = computeAmountDueThisCycle(contract, talent);
   const alreadyPaidCount = [...db.payPeriods.values()].filter(p => p.contract_id === contract.contract_id && p.paid_at).length;
   const isFirstPayment = alreadyPaidCount === 0; // still needed below for the pay-period email copy — a renewal on payment 13 is NOT "first payment"
 
@@ -1231,6 +1257,19 @@ async function settleNgnPayment(contract) {
     insurance_naira: isInsuranceRenewalDue ? (Number(contract.coverage_amount_paid) || 0) : 0,
     settled_at: new Date().toISOString(),
   });
+
+  // The settlement itself already succeeded by this point — a hub
+  // notification failing must never look like the payment failed. This is
+  // generic by design (reads whichever hub the talent's own pipeline maps
+  // to), so it works the same way for every hub on the dashboard, not
+  // just whichever one this was built and tested against.
+  if (hubMarkupNaira > 0 && hubKeyRecord) {
+    try {
+      await sendHubPaymentNotificationEmail(contract, talent, hubKeyRecord, remainingForTalent, hubMarkupNaira);
+    } catch (err) {
+      console.warn('[felicity-ngn] hub notification email failed (settlement itself still succeeded):', err.message);
+    }
+  }
 
   const settledPeriod = settledPeriodForLedger;
   const nextPeriod = settledPeriod ? [...db.payPeriods.values()]
@@ -1514,7 +1553,7 @@ function requireAdminKey(req, res, next) {
 // Persisted immediately if UPSTASH_REDIS_REST_URL/TOKEN are set — otherwise
 // this key dies the moment the server restarts (see PERSISTENCE section above).
 app.post('/admin/keys', requireAdminKey, async (req, res) => {
-  const { client_id, type = 'enterprise', hub_scope = null, hub_markup_cap_bps = 0, hub_markup_bps = 0, hub_settlement_account = null } = req.body || {};
+  const { client_id, type = 'enterprise', hub_scope = null, hub_markup_cap_bps = 0, hub_markup_bps = 0, hub_settlement_account = null, hub_notification_email = null } = req.body || {};
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
   if (!['enterprise', 'hub'].includes(type)) return res.status(400).json({ error: 'type must be "enterprise" or "hub"' });
   if (type === 'hub' && !hub_scope) return res.status(400).json({ error: 'hub_scope is required when type is "hub"' });
@@ -1528,9 +1567,10 @@ app.post('/admin/keys', requireAdminKey, async (req, res) => {
     hub_markup_cap_bps: cap,
     hub_markup_bps: rate,
     hub_settlement_account: type === 'hub' ? (hub_settlement_account || null) : null,
+    hub_notification_email: type === 'hub' ? (hub_notification_email || null) : null,
   };
   await saveState();
-  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope, hub_markup_cap_bps: cap, hub_markup_bps: rate, hub_settlement_account: KEYS[newKey].hub_settlement_account, persisted: PERSISTENCE_ENABLED });
+  res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope, hub_markup_cap_bps: cap, hub_markup_bps: rate, hub_settlement_account: KEYS[newKey].hub_settlement_account, hub_notification_email: KEYS[newKey].hub_notification_email, persisted: PERSISTENCE_ENABLED });
 });
 
 // PATCH /admin/keys/:apiKey — the admin-side update. Use this to set the
@@ -1543,7 +1583,7 @@ app.patch('/admin/keys/:apiKey', requireAdminKey, async (req, res) => {
   if (!record) return res.status(404).json({ error: 'key_not_found' });
   if (record.type !== 'hub') return res.status(400).json({ error: 'not_a_hub_key', message: 'Markup and settlement accounts only apply to hub-type keys.' });
 
-  const { hub_markup_cap_bps, hub_markup_bps, hub_settlement_account } = req.body || {};
+  const { hub_markup_cap_bps, hub_markup_bps, hub_settlement_account, hub_notification_email } = req.body || {};
   if (hub_markup_cap_bps !== undefined) {
     record.hub_markup_cap_bps = Number(hub_markup_cap_bps) || 0;
     // Lowering the cap below the hub's current rate pulls their rate down
@@ -1552,9 +1592,10 @@ app.patch('/admin/keys/:apiKey', requireAdminKey, async (req, res) => {
   }
   if (hub_markup_bps !== undefined) record.hub_markup_bps = Math.min(Number(hub_markup_bps) || 0, record.hub_markup_cap_bps || 0);
   if (hub_settlement_account !== undefined) record.hub_settlement_account = hub_settlement_account;
+  if (hub_notification_email !== undefined) record.hub_notification_email = hub_notification_email;
 
   await saveState();
-  res.json({ client_id: record.client_id, hub_scope: record.hub_scope, hub_markup_cap_bps: record.hub_markup_cap_bps, hub_markup_bps: record.hub_markup_bps, hub_settlement_account: record.hub_settlement_account });
+  res.json({ client_id: record.client_id, hub_scope: record.hub_scope, hub_markup_cap_bps: record.hub_markup_cap_bps, hub_markup_bps: record.hub_markup_bps, hub_settlement_account: record.hub_settlement_account, hub_notification_email: record.hub_notification_email });
 });
 
 // GET /admin/keys — list every client, their type/scope, and their key (masked).
@@ -2330,6 +2371,24 @@ app.patch('/v1/hub/settlement-account', async (req, res) => {
   res.json({ hub_settlement_account: record.hub_settlement_account });
 });
 
+// PATCH /v1/hub/notification-email — where FetchTalos sends "your talent
+// was just paid, here's your markup" notifications. This is what
+// sendHubPaymentNotificationEmail (see settleNgnPayment) actually reads —
+// without this set, a hub simply never gets notified, silently. Every
+// hub needs to set this themselves for the notification to work at all.
+app.patch('/v1/hub/notification-email', async (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  const record = findOwnHubKeyRecord(req.clientId);
+  if (!record) return res.status(404).json({ error: 'hub_key_not_found' });
+
+  const { email } = req.body || {};
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'valid_email_required' });
+
+  record.hub_notification_email = email;
+  await saveState();
+  res.json({ hub_notification_email: record.hub_notification_email });
+});
+
 // GET /v1/hub/account — the hub's own current settings, so the dashboard
 // has something to load on open (markup, cap, settlement account, scope).
 app.get('/v1/hub/account', (req, res) => {
@@ -2342,6 +2401,7 @@ app.get('/v1/hub/account', (req, res) => {
     hub_markup_bps: record.hub_markup_bps || 0,
     hub_markup_cap_bps: record.hub_markup_cap_bps || 0,
     hub_settlement_account: record.hub_settlement_account || null,
+    hub_notification_email: record.hub_notification_email || null,
   });
 });
 
