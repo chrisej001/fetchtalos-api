@@ -510,7 +510,7 @@
               <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="#2fe6c6" stroke-width="2"/><line x1="16.5" y1="16.5" x2="21" y2="21" stroke="#2fe6c6" stroke-width="2" stroke-linecap="round"/></svg>
             </div>
             <h3>Discover</h3>
-            <p>Browse vetted talent pools — scoped to a specific hub, or open across the full network — filtered by skill, seniority, and availability.</p>
+            <p>Browse vetted talent pools — scoped to a specific hub, or open across the full network — filtered by skill and availability.</p>
           </div>
           <div>
             <div class="endpoint"><span class="method">GET</span>/v1/talents/discover</div>
@@ -524,10 +524,10 @@
               <svg viewBox="0 0 24 24" fill="none"><path d="M4 12h11M11 6l6 6-6 6" stroke="#2fe6c6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </div>
             <h3>Hire</h3>
-            <p>Propose terms, currency, and coverage. The talent accepts through a single public link — no account required — and a real contract is generated instantly.</p>
+            <p>Propose terms, currency, and coverage. The talent confirms through a single public link — no account required — moving the hire straight into a real contract.</p>
           </div>
           <div>
-            <div class="endpoint"><span class="method">POST</span>/v1/engagements/:id/contract</div>
+            <div class="endpoint"><span class="method">POST</span>/v1/engagements/create</div>
           </div>
         </div>
 
@@ -555,7 +555,7 @@
             <p>Health coverage tied directly to the contract from day one — not an afterthought bolted on once the enterprise gets around to it.</p>
           </div>
           <div>
-            <div class="endpoint"><span class="method">GET</span>/v1/coverage_status</div>
+            <div class="endpoint"><span class="method">GET</span>/v1/contracts/:id</div>
           </div>
         </div>
       </div>
