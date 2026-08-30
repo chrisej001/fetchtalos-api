@@ -2797,6 +2797,16 @@ app.get('/v1/contracts/:id/pay-periods', (req, res) => {
 // Insurance amount tries a live quote first (like the Plans calculator),
 // falling back to the catalog estimate if that's not available, and is
 // only included at all on a cycle where it's actually due.
+//
+// service_fee_naira = platform_fee_naira + hub_markup_naira, COMBINED.
+// This is deliberate: an enterprise seeing "platform fee" and "hub
+// markup" as two separate line items reads like two different companies
+// are each taking a cut, or worse, like two different people are being
+// paid — confusing, and not their concern anyway. What an enterprise
+// needs is one honest total. HUBS: your markup is real and still fully
+// tracked — see it broken out on its own via GET /v1/hub/account (your
+// current rate) and GET /v1/hub/stats (what you've actually earned).
+// It's only ever combined in THIS endpoint, the one an enterprise reads.
 app.get('/v1/contracts/:id/amount-due', async (req, res) => {
   const contract = db.contracts.get(req.params.id);
   if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
@@ -2827,11 +2837,15 @@ app.get('/v1/contracts/:id/amount-due', async (req, res) => {
     }
   }
 
-  const total = breakdown.salaryNaira + breakdown.platformFeeNaira + breakdown.hubMarkupNaira + insuranceNaira;
+  const serviceFeeNaira = +(breakdown.platformFeeNaira + breakdown.hubMarkupNaira).toFixed(2);
+  const total = breakdown.salaryNaira + serviceFeeNaira + insuranceNaira;
 
   res.json({
     contract_id: contract.contract_id,
     salary_naira: breakdown.salaryNaira,
+    service_fee_naira: serviceFeeNaira,
+    // Split components kept for completeness/audit — an enterprise-facing
+    // UI should show service_fee_naira as ONE line, not these two.
     platform_fee_naira: breakdown.platformFeeNaira,
     hub_markup_naira: breakdown.hubMarkupNaira,
     insurance_due_this_cycle: breakdown.isInsuranceRenewalDue,

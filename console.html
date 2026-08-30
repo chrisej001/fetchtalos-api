@@ -569,9 +569,8 @@ function simulateNgnDeposit(contractId, defaultAmount){
   api('/v1/contracts/' + contractId + '/amount-due').then(function(breakdown){
     var lines = [
       'Salary: ₦' + breakdown.salary_naira.toLocaleString(),
-      'FetchTalos platform fee: ₦' + breakdown.platform_fee_naira.toLocaleString(),
+      'Service fee: ₦' + breakdown.service_fee_naira.toLocaleString(),
     ];
-    if(breakdown.hub_markup_naira > 0) lines.push('Hub markup: ₦' + breakdown.hub_markup_naira.toLocaleString());
     if(breakdown.insurance_due_this_cycle){
       lines.push('Insurance (due this cycle' + (breakdown.insurance_is_live_quote ? ', live quote' : ', estimate') + '): ₦' + breakdown.insurance_naira.toLocaleString());
     } else {

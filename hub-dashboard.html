@@ -229,12 +229,9 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
     </div>
 
     <div class="subpanel" id="subpanel-simcontracts">
-      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">GET /v1/contracts — same idea. Once a talent accepts a contract, their NGN account and next steps show up here, live from the server.</p>
+      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">GET /v1/contracts — same idea. Once a talent accepts a contract, the full amount due and where to send it show up here directly — no need to click anything to see it. "Simulate: transfer received" is a testing tool for what happens AFTER a real bank transfer lands, not how you'd see the payment details.</p>
       <button class="row-btn" id="refreshSimContractsBtn" style="margin-bottom:14px;">↻ Refresh</button>
-      <div class="tbl-wrap">
-        <table><thead><tr><th>Contract</th><th>Talent</th><th>Amount</th><th>Status</th><th>NGN account / insurance</th><th>Action</th></tr></thead>
-        <tbody id="simContractsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
-      </div>
+      <div id="simContractsContainer"><div class="empty-state">// connect to load</div></div>
     </div>
   </section>
 </main>
@@ -482,11 +479,11 @@ document.getElementById('calcBtn').onclick = async function(){
   const cycleLabel = duration === 1 ? 'every month' : `every ${duration} months (month 1, then month ${duration+1}, ${2*duration+1}...)`;
   const insuranceLabel = isLiveQuote ? 'live quote' : 'catalog estimate — not a live-confirmed quote';
 
+  const serviceFee = platformFee + hubMarkup;
   document.getElementById('calcResult').style.display = 'block';
   document.getElementById('calcResult').innerHTML = `
     <div class="calc-row"><span>Salary</span><span>₦${salary.toLocaleString()}</span></div>
-    <div class="calc-row"><span>FetchTalos platform fee (${platformFeeBps/100}%)</span><span>₦${platformFee.toLocaleString()}</span></div>
-    ${hubMarkupBps > 0 ? `<div class="calc-row"><span>Hub markup (${hubMarkupBps/100}%)</span><span>₦${hubMarkup.toLocaleString()}</span></div>` : ''}
+    <div class="calc-row"><span>Service fee${hubMarkupBps > 0 ? ` (includes your ${hubMarkupBps/100}% markup)` : ''}</span><span>₦${serviceFee.toLocaleString()}</span></div>
     <div class="calc-row"><span>Insurance, ${insuranceLabel} (renews ${cycleLabel})</span><span>₦${insurance.toLocaleString()}</span></div>
     <div class="calc-row total"><span>Renewal month total</span><span>₦${renewalMonth.toLocaleString()}</span></div>
     <div class="calc-row total"><span>Other months</span><span>₦${otherMonths.toLocaleString()}</span></div>
@@ -611,66 +608,76 @@ window.simSendContract = async function(engagementId){
 /* CONTRACTS sub-tab — same idea, scoped to this hub's own contracts */
 async function renderSimContracts(){
   if(!connected) return;
+  const container = document.getElementById('simContractsContainer');
   try{
     const data = await api('/v1/contracts');
-    const tbody = document.getElementById('simContractsTableBody');
     const rows = data.results.slice().reverse();
-    tbody.innerHTML = rows.length ? rows.map(c=>{
-      let ngnCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
-      if(c.ngn_status === 'onboarded'){
-        ngnCell = `<span class="mono" style="font-size:11px;color:var(--purple);">${c.ngn_account_number}<br>${c.ngn_bank_name}</span>`;
-      } else if(c.ngn_status){
-        ngnCell = `<span style="color:var(--red);font-size:11px;">${c.ngn_status}${c.ngn_note ? ': '+c.ngn_note : ''}</span>`;
-      }
-      if(c.coverage_status === 'active'){
-        ngnCell += `<br><span style="color:var(--teal);font-size:11px;">insurance: ${c.coverage_policy_id||'active'}</span>`;
-      }
+    if(!rows.length){ container.innerHTML = '<div class="empty-state">// no contracts yet — send one from the Engagements tab</div>'; return; }
 
-      let actionCell = '<span style="color:var(--text-faint);font-size:11px;">-</span>';
+    // Fetch the real amount-due breakdown for every active, onboarded NGN
+    // contract UP FRONT, in parallel — this is the whole point: the
+    // enterprise sees the exact figure and where to send it the moment
+    // this tab loads, not only after clicking something.
+    const breakdowns = {};
+    await Promise.all(rows
+      .filter(c => c.status === 'active' && c.ngn_status === 'onboarded')
+      .map(c => api(`/v1/contracts/${c.contract_id}/amount-due`)
+        .then(b => { breakdowns[c.contract_id] = b; })
+        .catch(() => { breakdowns[c.contract_id] = null; })
+      )
+    );
+
+    container.innerHTML = rows.map(c => {
+      let body = '';
       if(c.status === 'pending_talent_signature'){
-        actionCell = `<button class="btn-teal" onclick="window.open('${BASE_URL}/v1/contracts/${c.contract_id}/accept?token=${c.accept_token}','_blank')">Open acceptance page →</button>`;
-      } else if(c.status === 'active' && c.ngn_status === 'onboarded'){
-        actionCell = `<button class="btn-primary" style="padding:5px 11px;font-size:11.5px;" onclick="simDeposit('${c.contract_id}', ${c.proposed_amount||0})">Simulate deposit</button>`
-          + `<br><button class="row-btn" style="margin-top:4px;color:var(--red);border-color:var(--red);" onclick="simRelease('${c.contract_id}','${c.talent_name.replace(/'/g,"\\'")}')">Release</button>`;
-      } else if(c.status === 'active'){
-        actionCell = `<button class="row-btn" style="color:var(--red);border-color:var(--red);" onclick="simRelease('${c.contract_id}','${c.talent_name.replace(/'/g,"\\'")}')">Release</button>`;
+        body = `<button class="btn-teal" onclick="window.open('${BASE_URL}/v1/contracts/${c.contract_id}/accept?token=${c.accept_token}','_blank')">Open acceptance page →</button>`;
       } else if(c.status === 'released'){
-        actionCell = '<span style="color:var(--text-faint);font-size:11px;">released</span>';
+        body = '<span style="color:var(--text-faint);font-size:12px;">Released — no longer active.</span>';
+      } else if(c.status === 'active' && c.ngn_status !== 'onboarded'){
+        body = `<span style="color:var(--red);font-size:12.5px;">${c.ngn_status || 'not onboarded yet'}${c.ngn_note ? ': '+c.ngn_note : ''}</span>`;
+      } else if(c.status === 'active'){
+        const b = breakdowns[c.contract_id];
+        const policyLine = c.coverage_status === 'active'
+          ? `<div class="calc-row"><span>Health coverage</span><span style="color:var(--teal);">${c.coverage_policy_id||'active'}${c.coverage_policy_document_url ? ' — <a href="'+c.coverage_policy_document_url+'" target="_blank" style="color:var(--amber);">policy document</a>' : ' (document pending)'}</span></div>`
+          : '';
+        body = b ? `
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:var(--text-faint);margin-bottom:3px;">PAY TO</div>
+            <div class="mono" style="font-size:14px;color:var(--purple);">${c.ngn_account_number} — ${c.ngn_bank_name}</div>
+          </div>
+          <div class="calc">
+            <div class="calc-row"><span>Salary</span><span>₦${b.salary_naira.toLocaleString()}</span></div>
+            <div class="calc-row"><span>Service fee</span><span>₦${b.service_fee_naira.toLocaleString()}</span></div>
+            <div class="calc-row"><span>Insurance${b.insurance_due_this_cycle ? (b.insurance_is_live_quote ? ' (due, live quote)' : ' (due, estimate)') : ' (not due this cycle)'}</span><span>₦${b.insurance_naira.toLocaleString()}</span></div>
+            <div class="calc-row total"><span>TOTAL TO WIRE THIS CYCLE</span><span>₦${b.total_naira.toLocaleString()}</span></div>
+          </div>
+          ${policyLine}
+          <div style="margin-top:14px;">
+            <button class="row-btn" onclick="simDeposit('${c.contract_id}', ${b.total_naira})" title="Testing tool — simulates what happens once a real transfer lands, doesn't itself move anything real">Simulate: transfer received (test)</button>
+            <button class="row-btn" style="margin-left:8px;color:var(--red);border-color:var(--red);" onclick="simRelease('${c.contract_id}','${c.talent_name.replace(/'/g,"\\'")}')">Release</button>
+          </div>` : '<span style="color:var(--red);font-size:12px;">Could not load the amount due — try refreshing.</span>';
       }
 
-      return `<tr><td class="mono" style="font-size:11px;">${c.contract_id}</td><td>${c.talent_name}</td>
-        <td class="mono">${c.proposed_amount ? c.proposed_amount + ' ' + c.employer_currency : '-'}</td>
-        <td><span class="status-pill status-${c.status}">${c.status}</span></td>
-        <td>${ngnCell}</td>
-        <td>${actionCell}</td></tr>`;
-    }).join('') : '<tr><td colspan="6" class="empty-state">// no contracts yet — send one from the Engagements tab</td></tr>';
+      return `<div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <div><strong>${c.talent_name}</strong> <span class="mono" style="font-size:11px;color:var(--text-faint);">${c.contract_id}</span></div>
+          <span class="status-pill status-${c.status}">${c.status}</span>
+        </div>
+        ${body}
+      </div>`;
+    }).join('');
   }catch(err){ showToast('Failed to load contracts: ' + err.message, true); }
 }
 document.getElementById('refreshSimContractsBtn').onclick = renderSimContracts;
 
-window.simDeposit = async function(contractId, defaultAmount){
-  let breakdown;
+// Purely a testing tool now — simulates what happens once a real bank
+// transfer lands, for verifying the settlement flow works. The enterprise
+// already sees the exact amount and account on the page itself; this no
+// longer needs to show or confirm that same information again.
+window.simDeposit = async function(contractId, totalAmount){
   try{
-    breakdown = await api(`/v1/contracts/${contractId}/amount-due`);
-  }catch(err){ showToast('Failed to fetch the amount due: ' + err.message, true); return; }
-
-  const lines = [
-    'Salary: ₦' + breakdown.salary_naira.toLocaleString(),
-    'FetchTalos platform fee: ₦' + breakdown.platform_fee_naira.toLocaleString(),
-  ];
-  if(breakdown.hub_markup_naira > 0) lines.push('Hub markup: ₦' + breakdown.hub_markup_naira.toLocaleString());
-  lines.push(breakdown.insurance_due_this_cycle
-    ? 'Insurance (due this cycle' + (breakdown.insurance_is_live_quote ? ', live quote' : ', estimate') + '): ₦' + breakdown.insurance_naira.toLocaleString()
-    : 'Insurance: not due this cycle');
-  lines.push('');
-  lines.push('TOTAL TO WIRE: ₦' + breakdown.total_naira.toLocaleString());
-  lines.push('');
-  lines.push('Simulate wiring this exact amount now?');
-  if(!confirm(lines.join('\n'))) return;
-
-  try{
-    await api(`/v1/contracts/${contractId}/simulate-deposit`, { method:'POST', body: JSON.stringify({ amount_naira: breakdown.total_naira }) });
-    showToast('Wired ₦' + breakdown.total_naira.toLocaleString() + ' — Felicity is delivering the real webhook now, refreshing shortly');
+    await api(`/v1/contracts/${contractId}/simulate-deposit`, { method:'POST', body: JSON.stringify({ amount_naira: totalAmount }) });
+    showToast('Simulated ₦' + totalAmount.toLocaleString() + ' landing — Felicity is delivering the real webhook now, refreshing shortly');
     setTimeout(renderSimContracts, 4000);
   }catch(err){ showToast('Simulate deposit failed: ' + err.message, true); }
 };
