@@ -264,6 +264,75 @@ async function sendEmail({ to, subject, html, attachments }) {
 }
 
 /* ---------------------------------------------------------------------- *
+ * EMAIL TEMPLATE — every email this API sends shares this shell, so an
+ * inbox sees the same brand as the landing page / docs / admin / hub /
+ * talent-facing web pages. Built with a table layout and inline styles
+ * throughout (not the <style>-block + class approach used on the actual
+ * web pages) because email clients — Outlook especially — strip <style>
+ * blocks and don't reliably load Google Fonts, so anything not inlined
+ * risks rendering as unstyled plain text. The color-scheme meta tags lock
+ * the design to dark regardless of the recipient's own light/dark mode
+ * setting, so Gmail/Apple Mail's automatic dark-mode re-coloring can't
+ * invert it into something illegible.
+ * ---------------------------------------------------------------------- */
+function emailIcon(glyph, accent) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px;"><tr><td width="44" height="44" style="width:44px;height:44px;border-radius:50%;background-color:#171b24;text-align:center;vertical-align:middle;font-family:Arial,sans-serif;font-size:18px;font-weight:700;color:${accent};">${glyph}</td></tr></table>`;
+}
+
+function emailButton(url, label) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:26px 0 4px;"><tr><td style="border-radius:8px;background-color:#f2f5f7;"><a href="${url}" style="display:inline-block;padding:13px 26px;font-family:'JetBrains Mono',Menlo,Consolas,monospace;font-size:13.5px;font-weight:600;color:#090b10;text-decoration:none;">${label}</a></td></tr></table>`;
+}
+
+// rows: [{ label, value, accent }] — accent is an optional hex color for the value.
+function emailInfoRows(rows) {
+  const trs = rows.map((r, i) => `<tr>
+      <td style="padding:12px 0;border-bottom:${i === rows.length - 1 ? 'none' : '1px solid #232834'};font-family:'JetBrains Mono',Menlo,Consolas,monospace;font-size:11.5px;color:#5b6472;text-transform:uppercase;letter-spacing:.04em;">${r.label}</td>
+      <td style="padding:12px 0;border-bottom:${i === rows.length - 1 ? 'none' : '1px solid #232834'};text-align:right;font-family:'IBM Plex Sans',Arial,sans-serif;font-size:14px;font-weight:600;color:${r.accent || '#f2f5f7'};">${r.value}</td>
+    </tr>`).join('');
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0 4px;">${trs}</table>`;
+}
+
+function emailShell({ preheader = '', bodyHtml, icon, headline }) {
+  return `<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
+<title>FetchTalos</title>
+<style>@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');</style>
+</head>
+<body style="margin:0;padding:0;background-color:#090b10;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${preheader}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#090b10;">
+    <tr><td align="center" style="padding:44px 16px 36px;">
+
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+        <tr><td style="font-family:'Bricolage Grotesque',Arial,sans-serif;font-weight:700;font-size:16px;color:#f2f5f7;">
+          <span style="color:#2fe6c6;">●</span><span style="color:#ff8a4c;">●</span>&nbsp; FetchTalos
+        </td></tr>
+      </table>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background-color:#12151c;border:1px solid #232834;border-radius:16px;">
+        <tr><td style="padding:40px 36px;">
+          ${icon ? emailIcon(icon.glyph, icon.accent) : ''}
+          <div style="font-family:'Bricolage Grotesque',Arial,sans-serif;font-weight:700;font-size:22px;line-height:1.3;color:#f2f5f7;letter-spacing:-.01em;margin-bottom:14px;">${headline}</div>
+          <div style="font-family:'IBM Plex Sans',Arial,sans-serif;font-size:14.5px;line-height:1.7;color:#97a1b0;">${bodyHtml}</div>
+        </td></tr>
+      </table>
+
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:26px;">
+        <tr><td style="font-family:'JetBrains Mono',Menlo,Consolas,monospace;font-size:11px;color:#5b6472;text-align:center;">Sent by FetchTalos</td></tr>
+      </table>
+
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+/* ---------------------------------------------------------------------- *
  * MYCOVER.AI — real health coverage, not a label. Two modes, matching
  * Chris's own integration doc exactly:
  *
@@ -998,19 +1067,21 @@ async function listInsuranceProductsNgn() {
  */
 async function sendPolicyDocumentEmail(contract, talent) {
   if (!talent?.email) return { sent: false, reason: 'talent_missing_email' };
+  const rows = [{ label: 'Policy number', value: contract.coverage_policy_id || '—' }];
+  if (contract.coverage_start_date) rows.push({ label: 'Start date', value: contract.coverage_start_date });
+  if (contract.coverage_expiration_date) rows.push({ label: 'Expires', value: contract.coverage_expiration_date });
+
   return sendEmail({
     to: talent.email,
     subject: `Your health insurance policy document is ready`,
-    html: `<p>Hi ${contract.talent_name},</p>
-      <p>Your policy document for ${contract.employer_name}'s coverage is now available:</p>
-      <ul>
-        <li><b>Policy number:</b> ${contract.coverage_policy_id || ''}</li>
-        ${contract.coverage_start_date ? `<li><b>Start date:</b> ${contract.coverage_start_date}</li>` : ''}
-        ${contract.coverage_expiration_date ? `<li><b>Expires:</b> ${contract.coverage_expiration_date}</li>` : ''}
-        <li><b>Document:</b> <a href="${contract.coverage_policy_document_url}">${contract.coverage_policy_document_url}</a></li>
-      </ul>
-      <p>Keep this email — it's your record.</p>
-      <p>— FetchTalos</p>`
+    html: emailShell({
+      preheader: `Your policy document for ${contract.employer_name}'s coverage is ready.`,
+      icon: { glyph: '&#10003;', accent: '#2fe6c6' },
+      headline: 'Your policy document is ready',
+      bodyHtml: `Hi ${contract.talent_name} — your policy document for <b style="color:#f2f5f7;">${contract.employer_name}</b>'s coverage is now available. Keep this email, it's your record.
+        ${emailInfoRows(rows)}
+        ${emailButton(contract.coverage_policy_document_url, 'View policy document')}`,
+    }),
   });
 }
 
@@ -1049,14 +1120,17 @@ async function sendHubPaymentNotificationEmail(contract, talent, hubKeyRecord, t
   return sendEmail({
     to: hubKeyRecord.hub_notification_email,
     subject: `${talent.name} was paid — ₦${hubMarkupNaira.toLocaleString()} markup settled to you`,
-    html: `<p>Hi,</p>
-      <p><b>${talent.name}</b> (${contract.role_title || 'contractor'} at ${contract.employer_name}) was just paid through your pipeline.</p>
-      <ul>
-        <li><b>Talent received:</b> ₦${talentAmountNaira.toLocaleString()}</li>
-        <li><b>Your markup earned this cycle:</b> ₦${hubMarkupNaira.toLocaleString()}</li>
-      </ul>
-      <p>Your markup has been sent to the settlement account on file. See your full earnings history any time on your dashboard's Overview tab.</p>
-      <p>— FetchTalos</p>`
+    html: emailShell({
+      preheader: `₦${hubMarkupNaira.toLocaleString()} markup settled to you.`,
+      icon: { glyph: '&#10003;', accent: '#2fe6c6' },
+      headline: 'Your markup was just settled',
+      bodyHtml: `<b style="color:#f2f5f7;">${talent.name}</b> (${contract.role_title || 'contractor'} at ${contract.employer_name}) was just paid through your pipeline. Your markup has been sent to the settlement account on file.
+        ${emailInfoRows([
+          { label: 'Talent received', value: `₦${talentAmountNaira.toLocaleString()}` },
+          { label: 'Your markup earned', value: `₦${hubMarkupNaira.toLocaleString()}`, accent: '#ff8a4c' },
+        ])}
+        See your full earnings history any time on your dashboard's Overview tab.`,
+    }),
   });
 }
 
@@ -1083,21 +1157,31 @@ async function sendPaymentReminderEmail(contract, period) {
   const total = breakdown.salaryNaira + serviceFeeNaira + insuranceNaira;
   const dueDate = new Date(period.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
+  const rows = [
+    { label: 'Due', value: dueDate },
+    { label: 'Salary', value: `₦${breakdown.salaryNaira.toLocaleString()}` },
+    { label: 'Service fee', value: `₦${serviceFeeNaira.toLocaleString()}` },
+  ];
+  if (breakdown.isInsuranceRenewalDue) {
+    rows.push({ label: `Insurance (${isLiveQuote ? 'live quote' : 'estimate'})`, value: `₦${insuranceNaira.toLocaleString()}` });
+  }
+  rows.push({ label: 'Total to wire', value: `₦${total.toLocaleString()}`, accent: '#ff8a4c' });
+
   return sendEmail({
     to: contract.employer_email,
     subject: `Payment due ${dueDate} — ${contract.talent_name}, ₦${total.toLocaleString()}`,
-    html: `<p>Hi,</p>
-      <p>A payment cycle for <b>${contract.talent_name}</b> (${contract.role_title || 'contractor'}) is coming up:</p>
-      <ul>
-        <li><b>Due:</b> ${dueDate}</li>
-        <li><b>Salary:</b> ₦${breakdown.salaryNaira.toLocaleString()}</li>
-        <li><b>Service fee:</b> ₦${serviceFeeNaira.toLocaleString()}</li>
-        ${breakdown.isInsuranceRenewalDue ? `<li><b>Insurance</b> (${isLiveQuote ? 'live quote' : 'estimate'}, renews this cycle): ₦${insuranceNaira.toLocaleString()}</li>` : ''}
-        <li><b>Total to wire:</b> ₦${total.toLocaleString()}</li>
-      </ul>
-      <p><b>Pay to:</b> ${contract.ngn_account_number || 'account pending'} — ${contract.ngn_bank_name || ''}</p>
-      <p>This is the exact amount — no need to calculate anything yourself. Once received, everything (salary, our fee, and insurance if due) is split and paid out automatically.</p>
-      <p>— FetchTalos</p>`
+    html: emailShell({
+      preheader: `₦${total.toLocaleString()} due ${dueDate} for ${contract.talent_name}.`,
+      icon: { glyph: '&#8594;', accent: '#ff8a4c' },
+      headline: 'A payment cycle is coming up',
+      bodyHtml: `A payment cycle for <b style="color:#f2f5f7;">${contract.talent_name}</b> (${contract.role_title || 'contractor'}) is coming up. This is the exact amount — no need to calculate anything yourself.
+        ${emailInfoRows(rows)}
+        <div style="margin-top:18px;padding:14px 16px;background-color:#171b24;border-radius:10px;font-size:13.5px;">
+          <div style="font-family:'JetBrains Mono',Menlo,Consolas,monospace;font-size:11px;color:#5b6472;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Pay to</div>
+          <div style="color:#f2f5f7;font-weight:600;">${contract.ngn_account_number || 'account pending'} — ${contract.ngn_bank_name || ''}</div>
+        </div>
+        <div style="margin-top:16px;">Once received, everything — salary, our fee, and insurance if due — is split and paid out automatically.</div>`,
+    }),
   });
 }
 
@@ -1289,18 +1373,24 @@ async function settleNgnPayment(contract) {
     .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0] : null;
 
   if (talent.email) {
+    const paidRows = [{ label: 'Amount', value: `₦${remainingForTalent.toLocaleString()}`, accent: '#2fe6c6' }];
+    if (isInsuranceRenewalDue && contract.coverage_status === 'active') {
+      paidRows.push({ label: 'Health coverage', value: `${isFirstPayment ? 'Active' : 'Renewed'} — policy ${contract.coverage_policy_id}` });
+    }
+    if (settledPeriod) paidRows.push({ label: 'Pay period', value: `#${settledPeriod.period_number}` });
+    if (nextPeriod) paidRows.push({ label: 'Next payment due', value: new Date(nextPeriod.due_date).toLocaleDateString() });
+
     await sendEmail({
       to: talent.email,
       subject: `You've been paid — ₦${remainingForTalent.toLocaleString()} received`,
-      html: `<p>Hi ${contract.talent_name},</p>
-        <p>Your payment for this pay period has landed.</p>
-        <ul>
-          <li><b>Amount:</b> ₦${remainingForTalent.toLocaleString()}</li>
-          ${isInsuranceRenewalDue && contract.coverage_status === 'active' ? `<li><b>Health coverage:</b> ${isFirstPayment ? 'Active' : 'Renewed'} — policy ${contract.coverage_policy_id} (your policy document follows in a separate email once it's ready)</li>` : ''}
-          ${settledPeriod ? `<li><b>Pay period:</b> #${settledPeriod.period_number}</li>` : ''}
-          ${nextPeriod ? `<li><b>Next payment due:</b> ${new Date(nextPeriod.due_date).toLocaleDateString()}</li>` : ''}
-        </ul>
-        <p>— FetchTalos</p>`
+      html: emailShell({
+        preheader: `₦${remainingForTalent.toLocaleString()} has landed in your account.`,
+        icon: { glyph: '&#10003;', accent: '#2fe6c6' },
+        headline: "You've been paid",
+        bodyHtml: `Hi ${contract.talent_name} — your payment for this pay period has landed.
+          ${emailInfoRows(paidRows)}
+          ${isInsuranceRenewalDue && contract.coverage_status === 'active' ? "<div style=\"margin-top:14px;\">Your policy document follows in a separate email once it's ready.</div>" : ''}`,
+      }),
     });
   }
 
@@ -2518,12 +2608,18 @@ app.post('/v1/engagements/create', async (req, res) => {
   await sendEmail({
     to: talent.email,
     subject: `Interview invite from ${employer_name} via FetchTalos`,
-    html: `<p>Hi ${talent.name},</p>
-      <p><b>${employer_name}</b> would like to interview you for the <b>${role_title}</b> role, sourced through your pipeline.</p>
-      ${proposed_time ? `<p><b>Proposed time:</b> ${proposed_time}</p>` : ''}
-      <p><b>Meeting link:</b> <a href="${interview_link}">${interview_link}</a></p>
-      ${message ? `<p><b>Note from ${employer_name}:</b> ${message}</p>` : ''}
-      <p><a href="${acceptUrl}">Click here to confirm you're in for this interview</a></p>`
+    html: emailShell({
+      preheader: `${employer_name} would like to interview you for the ${role_title} role.`,
+      icon: { glyph: '&#8594;', accent: '#ff8a4c' },
+      headline: `${employer_name} would like to interview you`,
+      bodyHtml: `Hi ${talent.name} — you've been invited to interview for the <b style="color:#f2f5f7;">${role_title}</b> role, sourced through your pipeline.
+        ${emailInfoRows([
+          ...(proposed_time ? [{ label: 'Proposed time', value: proposed_time }] : []),
+          { label: 'Meeting link', value: `<a href="${interview_link}" style="color:#2fe6c6;">${interview_link}</a>` },
+        ])}
+        ${message ? `<div style="margin-top:14px;padding:14px 16px;background-color:#171b24;border-radius:10px;font-size:13.5px;">Note from ${employer_name}: ${message}</div>` : ''}
+        ${emailButton(acceptUrl, "Confirm you're in for this interview")}`,
+    }),
   });
 
   res.status(201).json({ ...engagement, accept_url: acceptUrl });
@@ -2600,16 +2696,18 @@ app.post('/v1/engagements/:id/contract', async (req, res) => {
   await sendEmail({
     to: talent.email,
     subject: `Your offer from ${engagement.employer_name} is ready to review`,
-    html: `<p>Hi ${engagement.talent_name},</p>
-      <p>Following your interview, <b>${engagement.employer_name}</b> would like to move forward. Attached is
-      your formal offer letter for the <b>${engagement.role_title}</b> role, covering remuneration,
-      responsibilities, and benefits.</p>
-      <ul>
-        <li><b>Role:</b> ${engagement.role_title}</li>
-        <li><b>Remuneration:</b> ${engagement.proposed_amount ? `${engagement.proposed_amount} ${engagement.employer_currency} / month` : 'see attached'}</li>
-        <li><b>Tax form:</b> ${contract.tax_form}</li>
-      </ul>
-      <p><a href="${acceptUrl}">Click here to accept and sign</a></p>`,
+    html: emailShell({
+      preheader: `Your offer letter for the ${engagement.role_title} role is ready to review.`,
+      icon: { glyph: '&#8594;', accent: '#ff8a4c' },
+      headline: `Your offer from ${engagement.employer_name} is ready`,
+      bodyHtml: `Hi ${engagement.talent_name} — following your interview, <b style="color:#f2f5f7;">${engagement.employer_name}</b> would like to move forward. Attached is your formal offer letter covering remuneration, responsibilities, and benefits.
+        ${emailInfoRows([
+          { label: 'Role', value: engagement.role_title },
+          { label: 'Remuneration', value: engagement.proposed_amount ? `${engagement.proposed_amount} ${engagement.employer_currency} / month` : 'see attached' },
+          { label: 'Tax form', value: contract.tax_form },
+        ])}
+        ${emailButton(acceptUrl, 'Accept and sign')}`,
+    }),
     attachments
   });
 
@@ -2839,40 +2937,43 @@ async function sendWelcomeEmail(contract, talent) {
 
   const isNgnFlow = contract.employer_currency === 'NGN';
 
-  const coverageLine = contract.coverage_status === 'active'
-    ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id || ''}</li>`
+  const coverageRow = contract.coverage_status === 'active'
+    ? { label: 'Health coverage', value: `Active — policy ${contract.coverage_policy_id || ''}` }
     : contract.coverage_status && contract.coverage_status !== 'not_yet_purchased'
-      ? `<li><b>Health coverage:</b> ${contract.coverage_status}${contract.coverage_note ? ' — ' + contract.coverage_note : ''}</li>`
+      ? { label: 'Health coverage', value: `${contract.coverage_status}${contract.coverage_note ? ' — ' + contract.coverage_note : ''}` }
       : isNgnFlow
-        ? `<li><b>Health coverage:</b> activates automatically with your first payment — no action needed from you.</li>`
-        : '';
-  const salaryLine = contract.salary_status === 'va_issued'
-    ? `<li><b>Salary account:</b> ${contract.salary_va_account_number} — ${contract.salary_va_bank_name}, routing ${contract.salary_va_routing_number}</li>`
+        ? { label: 'Health coverage', value: 'Activates automatically with your first payment' }
+        : null;
+  const salaryRow = contract.salary_status === 'va_issued'
+    ? { label: 'Salary account', value: `${contract.salary_va_account_number} — ${contract.salary_va_bank_name}, routing ${contract.salary_va_routing_number}` }
     : contract.salary_status && contract.salary_status !== 'not_yet_purchased'
-      ? `<li><b>Salary account:</b> ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}</li>`
+      ? { label: 'Salary account', value: `${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}` }
       : isNgnFlow
-        ? `<li><b>Salary:</b> paid automatically to the bank account you provided, every pay period — nothing further to set up.</li>`
-        : '';
+        ? { label: 'Salary', value: 'Paid automatically every pay period' }
+        : null;
   // NGN-flow talents deliberately don't see the intermediate pass-through
   // account at all here — it's internal plumbing, not something they need
   // to act on or check. Their real, actionable destination is the bank
   // account they themselves submitted at KYC, which is where their actual
   // salary lands every pay period. Onboarding status is FetchTalos's own
   // concern to monitor (see the admin console's NGN Rail tab), not the
-  // talent's. The two fallback lines above exist so this email never
+  // talent's. The two fallback rows above exist so this email never
   // renders as an empty, half-finished-looking list before the first
   // payment cycle — a real gap that made the email feel broken.
+  const rows = [coverageRow, salaryRow].filter(Boolean);
 
   return sendEmail({
     to: talent.email,
     subject: `Welcome aboard, ${contract.talent_name} — you're all set with ${contract.employer_name}`,
-    html: `<p>Hi ${contract.talent_name},</p>
-      <p>Congratulations — your contract with <b>${contract.employer_name}</b> for the <b>${contract.role_title || 'role'}</b> position is now active. Here's a quick summary of what's set up on your behalf:</p>
-      <ul>${coverageLine}${salaryLine}</ul>
-      <p>Everything above runs automatically from here — you won't need to submit any further details or take any action for either your pay or your coverage to keep working.</p>
-      <p>If anything looks off, or you have questions about your contract, reach out to your employer directly, or reply to this email and we'll help sort it out.</p>
-      <p>Welcome aboard, and congratulations again on the new role.</p>
-      <p>— The FetchTalos Team</p>`
+    html: emailShell({
+      preheader: `Your contract with ${contract.employer_name} is now active.`,
+      icon: { glyph: '&#10003;', accent: '#2fe6c6' },
+      headline: 'Welcome aboard',
+      bodyHtml: `Hi ${contract.talent_name} — congratulations, your contract with <b style="color:#f2f5f7;">${contract.employer_name}</b> for the <b style="color:#f2f5f7;">${contract.role_title || 'role'}</b> position is now active. Here's what's set up on your behalf:
+        ${rows.length ? emailInfoRows(rows) : ''}
+        <div style="margin-top:16px;">Everything above runs automatically from here — no further action needed for either your pay or your coverage to keep working. If anything looks off, reach out to your employer directly, or reply to this email and we'll help sort it out.</div>
+        <div style="margin-top:12px;">Welcome aboard, and congratulations again on the new role.</div>`,
+    }),
   });
 }
 
@@ -3297,17 +3398,20 @@ async function disburseOneContract(contract, req_clientId, idempotencyKey) {
 
   const talent = db.talents.find(t => t.talent_id === contract.talent_id);
   if (talent?.email) {
+    const paidRows = [{ label: 'Amount', value: `₦${netTalentNgn.toLocaleString()}`, accent: '#2fe6c6' }, { label: 'Converted from', value: `${grossEmployerCurrency} ${employerCurrency} at ${fx.rate}` }];
+    if (settledPeriod) paidRows.push({ label: 'Pay period', value: `#${settledPeriod.period_number}` });
+    if (nextPeriod) paidRows.push({ label: 'Next payment due', value: new Date(nextPeriod.due_date).toLocaleDateString() });
+
     await sendEmail({
       to: talent.email,
       subject: `You've been paid — ₦${netTalentNgn.toLocaleString()} received`,
-      html: `<p>Hi ${contract.talent_name},</p>
-        <p>Your payment for this pay period has landed.</p>
-        <ul>
-          <li><b>Amount:</b> ₦${netTalentNgn.toLocaleString()} (converted from ${grossEmployerCurrency} ${employerCurrency} at ${fx.rate})</li>
-          ${settledPeriod ? `<li><b>Pay period:</b> #${settledPeriod.period_number}</li>` : ''}
-          ${nextPeriod ? `<li><b>Next payment due:</b> ${new Date(nextPeriod.due_date).toLocaleDateString()}</li>` : ''}
-        </ul>
-        <p>— FetchTalos</p>`
+      html: emailShell({
+        preheader: `₦${netTalentNgn.toLocaleString()} has landed in your account.`,
+        icon: { glyph: '&#10003;', accent: '#2fe6c6' },
+        headline: "You've been paid",
+        bodyHtml: `Hi ${contract.talent_name} — your payment for this pay period has landed.
+          ${emailInfoRows(paidRows)}`,
+      }),
     });
   }
 
