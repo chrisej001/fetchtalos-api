@@ -1002,6 +1002,67 @@ async function sendPolicyDocumentEmail(contract, talent) {
   });
 }
 
+/**
+ * Shared by GET /v1/contracts/:id/amount-due and the reminder email below
+ * — one source of truth for "what's the insurance line THIS cycle,"
+ * rather than two separate implementations that could quietly drift.
+ * Tries a live quote first, falls back to the catalog estimate.
+ */
+async function estimateInsuranceForDisplay(contract) {
+  const quote = await quoteInsuranceNgn({ plan: contract.coverage_plan, coverage_months: contract.coverage_months });
+  if (quote.premium_naira != null) return { naira: quote.premium_naira, isLiveQuote: true };
+  try {
+    const catalog = await listInsuranceProductsNgn();
+    const products = catalog.products || catalog.data || catalog;
+    const productId = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
+    const product = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
+    return { naira: koboFieldToNaira(product, 'base_premium', 'base_premium_naira') || 0, isLiveQuote: false };
+  } catch (err) {
+    return { naira: 0, isLiveQuote: false };
+  }
+}
+
+/**
+ * The reminder email — sent to employer_email (the HR/finance contact
+ * captured at Engage time, not the talent), with the exact amount due
+ * for the upcoming cycle. This is the piece that makes the "check the
+ * dashboard yourself" flow proactive instead of something the enterprise
+ * has to remember to go do. Fired by POST /admin/felicity-ngn/send-due-
+ * reminders, which is meant to be hit daily — see that endpoint for the
+ * honest caveat on how that scheduling actually works right now.
+ */
+async function sendPaymentReminderEmail(contract, period) {
+  if (!contract.employer_email) return { sent: false, reason: 'employer_missing_email' };
+
+  const breakdown = computeAmountDueThisCycle(contract, db.talents.find(t => t.talent_id === contract.talent_id));
+  let insuranceNaira = 0, isLiveQuote = false;
+  if (breakdown.isInsuranceRenewalDue) {
+    const est = await estimateInsuranceForDisplay(contract);
+    insuranceNaira = est.naira;
+    isLiveQuote = est.isLiveQuote;
+  }
+  const serviceFeeNaira = +(breakdown.platformFeeNaira + breakdown.hubMarkupNaira).toFixed(2);
+  const total = breakdown.salaryNaira + serviceFeeNaira + insuranceNaira;
+  const dueDate = new Date(period.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  return sendEmail({
+    to: contract.employer_email,
+    subject: `Payment due ${dueDate} — ${contract.talent_name}, ₦${total.toLocaleString()}`,
+    html: `<p>Hi,</p>
+      <p>A payment cycle for <b>${contract.talent_name}</b> (${contract.role_title || 'contractor'}) is coming up:</p>
+      <ul>
+        <li><b>Due:</b> ${dueDate}</li>
+        <li><b>Salary:</b> ₦${breakdown.salaryNaira.toLocaleString()}</li>
+        <li><b>Service fee:</b> ₦${serviceFeeNaira.toLocaleString()}</li>
+        ${breakdown.isInsuranceRenewalDue ? `<li><b>Insurance</b> (${isLiveQuote ? 'live quote' : 'estimate'}, renews this cycle): ₦${insuranceNaira.toLocaleString()}</li>` : ''}
+        <li><b>Total to wire:</b> ₦${total.toLocaleString()}</li>
+      </ul>
+      <p><b>Pay to:</b> ${contract.ngn_account_number || 'account pending'} — ${contract.ngn_bank_name || ''}</p>
+      <p>This is the exact amount — no need to calculate anything yourself. Once received, everything (salary, our fee, and insurance if due) is split and paid out automatically.</p>
+      <p>— FetchTalos</p>`
+  });
+}
+
 /** Thin wrapper around the `send` action. */
 async function sendNgn({ talent_ref, amount_naira, account_number, bank_code, account_name }) {
   return felicityNgn('send', { talent_ref, amount_naira, account_number, bank_code, account_name });
@@ -1150,7 +1211,12 @@ async function settleNgnPayment(contract) {
 
   // Real history, not a snapshot — this is what GET /v1/hub/stats actually
   // sums from. Recorded only once we're past every failure point above,
-  // i.e. money genuinely moved.
+  // i.e. money genuinely moved. insurance_naira is only ever non-zero on
+  // a cycle where it was actually due and charged (see
+  // isInsuranceRenewalDue above) — coverage_amount_paid reflects
+  // whatever this SPECIFIC cycle's purchase/renewal actually cost, not a
+  // stale figure from an earlier cycle.
+  const settledPeriodForLedger = settleOldestUnpaidPeriod(contract.contract_id);
   db.ngnSettlements.push({
     settlement_id: id('ngnset'),
     contract_id: contract.contract_id,
@@ -1158,13 +1224,15 @@ async function settleNgnPayment(contract) {
     talent_name: contract.talent_name,
     hub_scope: talent.pipeline || null,
     employer_name: contract.employer_name,
+    period_number: settledPeriodForLedger?.period_number || null,
     salary_naira: remainingForTalent,
     platform_fee_naira: platformFeeNaira,
     hub_markup_naira: hubMarkupNaira,
+    insurance_naira: isInsuranceRenewalDue ? (Number(contract.coverage_amount_paid) || 0) : 0,
     settled_at: new Date().toISOString(),
   });
 
-  const settledPeriod = settleOldestUnpaidPeriod(contract.contract_id);
+  const settledPeriod = settledPeriodForLedger;
   const nextPeriod = settledPeriod ? [...db.payPeriods.values()]
     .filter(p => p.contract_id === contract.contract_id && !p.paid_at)
     .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0] : null;
@@ -2336,12 +2404,13 @@ app.get('/v1/hub/stats', (req, res) => {
 // POST /v1/engagements/create — "Engage": sends an interview invite
 app.post('/v1/engagements/create', async (req, res) => {
   const {
-    talent_id, employer_name, role_title, employer_country, employer_currency = 'USD', coverage_plan = 'remote_contractor_basic',
+    talent_id, employer_name, employer_email, role_title, employer_country, employer_currency = 'USD', coverage_plan = 'remote_contractor_basic',
     coverage_months = 1, proposed_amount, interview_link, proposed_time, message, kpis
   } = req.body || {};
 
   if (!interview_link) return res.status(400).json({ error: 'interview_link is required — a Calendly/Zoom/Meet link, whatever the enterprise uses' });
   if (!employer_name) return res.status(400).json({ error: 'employer_name is required — this is the company name that will appear on the offer letter' });
+  if (!employer_email) return res.status(400).json({ error: 'employer_email is required — a real HR/finance contact, since this is who FetchTalos emails about payment cycles and reminders (see POST /admin/felicity-ngn/send-due-reminders)' });
   if (!role_title) return res.status(400).json({ error: 'role_title is required — e.g. "Backend Engineer"' });
   if (!Array.isArray(kpis) || kpis.filter(k => k && k.trim()).length === 0) {
     return res.status(400).json({ error: 'kpis_required', message: 'Every engagement needs at least one KPI — pass kpis as a non-empty array of strings.' });
@@ -2361,7 +2430,7 @@ app.post('/v1/engagements/create', async (req, res) => {
     client_id: req.clientId,
     talent_id,
     talent_name: talent.name,
-    employer_name, role_title,
+    employer_name, employer_email, role_title,
     employer_country, employer_currency, coverage_plan, coverage_months: Number(coverage_months) || 1, proposed_amount: proposed_amount ? Number(proposed_amount) : null,
     interview_link, proposed_time: proposed_time || null, message: message || null,
     kpis: Array.isArray(kpis) ? kpis : null,
@@ -2419,6 +2488,7 @@ app.post('/v1/engagements/:id/contract', async (req, res) => {
     talent_id: engagement.talent_id,
     talent_name: engagement.talent_name,
     employer_name: engagement.employer_name,
+    employer_email: engagement.employer_email,
     role_title: engagement.role_title,
     employer_country: engagement.employer_country,
     employer_currency: engagement.employer_currency,
@@ -2817,28 +2887,24 @@ app.get('/v1/contracts/:id/amount-due', async (req, res) => {
   let insuranceNaira = 0;
   let insuranceIsLiveQuote = false;
   if (breakdown.isInsuranceRenewalDue) {
-    const quote = await quoteInsuranceNgn({ plan: contract.coverage_plan, coverage_months: contract.coverage_months });
-    if (quote.premium_naira != null) {
-      insuranceNaira = quote.premium_naira;
-      insuranceIsLiveQuote = true;
-    } else {
-      // Live quote failed or its shape isn't confirmed yet — fall back to
-      // the catalog estimate rather than silently showing ₦0 for
-      // insurance while still saying it's due. Understating the total on
-      // exactly the cycle where insurance is charged would be worse than
-      // an approximate-but-honest number.
-      try {
-        const catalog = await listInsuranceProductsNgn();
-        const products = catalog.products || catalog.data || catalog;
-        const productId = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
-        const product = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
-        insuranceNaira = koboFieldToNaira(product, 'base_premium', 'base_premium_naira') || 0;
-      } catch (err) { /* leaves insuranceNaira at 0 — genuinely nothing to go on */ }
-    }
+    const est = await estimateInsuranceForDisplay(contract);
+    insuranceNaira = est.naira;
+    insuranceIsLiveQuote = est.isLiveQuote;
   }
 
   const serviceFeeNaira = +(breakdown.platformFeeNaira + breakdown.hubMarkupNaira).toFixed(2);
   const total = breakdown.salaryNaira + serviceFeeNaira + insuranceNaira;
+
+  // What was actually paid last cycle (if anything yet), and when the
+  // NEXT one is due — so the response can say "this cycle is paid, here's
+  // what changes next" rather than the enterprise just seeing a new
+  // number appear with no context for why.
+  const lastPayment = db.ngnSettlements
+    .filter(s => s.contract_id === contract.contract_id)
+    .sort((a, b) => new Date(b.settled_at) - new Date(a.settled_at))[0] || null;
+  const nextPeriod = [...db.payPeriods.values()]
+    .filter(p => p.contract_id === contract.contract_id && !p.paid_at)
+    .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0] || null;
 
   res.json({
     contract_id: contract.contract_id,
@@ -2855,6 +2921,13 @@ app.get('/v1/contracts/:id/amount-due', async (req, res) => {
     pay_to_account_number: contract.ngn_account_number || null,
     pay_to_bank_name: contract.ngn_bank_name || null,
     ngn_status: contract.ngn_status || null,
+    last_payment: lastPayment ? {
+      period_number: lastPayment.period_number,
+      total_naira: +(lastPayment.salary_naira + lastPayment.platform_fee_naira + lastPayment.hub_markup_naira + lastPayment.insurance_naira).toFixed(2),
+      insurance_included: lastPayment.insurance_naira > 0,
+      paid_at: lastPayment.settled_at,
+    } : null,
+    next_payment_due_date: nextPeriod?.due_date || null,
   });
 });
 
@@ -3334,6 +3407,55 @@ app.post(['/webhooks/felicity', '/webhooks/mycover', '/webhooks/felicity-fincra'
 // arrive" — check this BEFORE assuming a real bug in the settlement logic.
 app.get('/admin/webhook-log', requireAdminKey, (req, res) => {
   res.json({ count: WEBHOOK_LOG.length, results: WEBHOOK_LOG });
+});
+
+// POST /admin/felicity-ngn/send-due-reminders — scans every active
+// NGN-flow contract, finds any whose next payment is due within 3 days
+// (or already overdue), and emails the employer the exact amount —
+// exactly what makes this proactive instead of "the enterprise has to
+// remember to check the dashboard themselves."
+//
+// HONEST CAVEAT ON SCHEDULING: this needs to run roughly once a day to
+// actually work as a reminder system. There's no real cron running
+// inside this app right now — calling this endpoint is the only thing
+// that triggers it. Two ways to make that happen for real:
+//   1. (Recommended) Point an external scheduler at this URL daily —
+//      Render's own Cron Jobs feature, or a free service like
+//      cron-job.org, hitting this exact endpoint with the admin key.
+//   2. Trigger it manually whenever needed, from here or the admin
+//      console — works for testing and demos, not a substitute for #1.
+// Duplicate-prevention: each contract remembers which period it was last
+// reminded about (contract.last_reminder_sent_for_period), so running
+// this daily won't re-email the same enterprise five times about the
+// same upcoming payment.
+app.post('/admin/felicity-ngn/send-due-reminders', requireAdminKey, async (req, res) => {
+  const windowDays = Number(req.body?.window_days) || 3;
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+
+  const results = [];
+  for (const contract of db.contracts.values()) {
+    if (contract.status !== 'active' || contract.employer_currency !== 'NGN') continue;
+
+    const nextPeriod = [...db.payPeriods.values()]
+      .filter(p => p.contract_id === contract.contract_id && !p.paid_at)
+      .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0];
+    if (!nextPeriod) continue;
+
+    const dueDate = new Date(nextPeriod.due_date);
+    const isDueSoonOrOverdue = dueDate <= windowEnd;
+    const alreadyReminded = contract.last_reminder_sent_for_period === nextPeriod.period_number;
+    if (!isDueSoonOrOverdue || alreadyReminded) continue;
+
+    const result = await sendPaymentReminderEmail(contract, nextPeriod);
+    if (result.sent !== false) {
+      contract.last_reminder_sent_for_period = nextPeriod.period_number;
+    }
+    results.push({ contract_id: contract.contract_id, talent_name: contract.talent_name, due_date: nextPeriod.due_date, sent: result.sent !== false, reason: result.reason || null });
+  }
+
+  await saveState();
+  res.json({ checked_window_days: windowDays, reminders_sent: results.filter(r => r.sent).length, results });
 });
 
 /* ---------------------------------------------------------------------- *

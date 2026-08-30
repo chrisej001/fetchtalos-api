@@ -228,6 +228,7 @@
     <h3 id="engageModalTitle">Engage</h3>
     <p class="modal-sub">POST /v1/engagements/create &mdash; sends an interview invite</p>
     <div class="field"><label>Employer / company name</label><input id="employerName" placeholder="e.g. Acme Corp" value="Acme Corp"></div>
+    <div class="field"><label>Employer HR/finance contact email</label><input id="employerEmail" type="email" placeholder="e.g. hr@acmecorp.com"></div>
     <div class="field"><label>Role title</label><input id="roleTitle" placeholder="e.g. Backend Engineer" value="Backend Engineer"></div>
     <div class="field"><label>Employer country</label>
       <select id="employerCountrySelect"><option value="US">United States</option><option value="UK">United Kingdom</option><option value="DE">Germany</option><option value="CA">Canada</option><option value="NG">Nigeria</option></select>
@@ -350,9 +351,11 @@ document.getElementById('sendEngageBtn').onclick = function(){
   if(!pendingTalentId) return;
   var interview_link = document.getElementById('interviewLink').value.trim();
   var employer_name = document.getElementById('employerName').value.trim();
+  var employer_email = document.getElementById('employerEmail').value.trim();
   var role_title = document.getElementById('roleTitle').value.trim();
   if(!interview_link){ showToast('Interview link is required', true); return; }
   if(!employer_name){ showToast('Employer / company name is required', true); return; }
+  if(!employer_email){ showToast('Employer HR/finance contact email is required — this is who gets payment reminders', true); return; }
   if(!role_title){ showToast('Role title is required', true); return; }
   var kpisRaw = document.getElementById('kpisInput').value.trim();
   var kpis = kpisRaw ? kpisRaw.split('\n').map(function(k){ return k.trim(); }).filter(Boolean) : [];
@@ -360,11 +363,11 @@ document.getElementById('sendEngageBtn').onclick = function(){
   api('/v1/engagements/create', { method:'POST', body: JSON.stringify({
     talent_id: pendingTalentId,
     employer_name: employer_name,
+    employer_email: employer_email,
     role_title: role_title,
     employer_country: document.getElementById('employerCountrySelect').value,
     employer_currency: document.getElementById('employerCurrencySelect').value,
     coverage_plan: document.getElementById('coveragePlanSelect').value,
-    coverage_months: document.getElementById('coverageMonthsSelect').value,
     coverage_months: document.getElementById('coverageMonthsSelect').value,
     proposed_amount: document.getElementById('proposedAmount').value || null,
     interview_link: interview_link,
@@ -567,10 +570,13 @@ function simulateContractAccept(contractId, token){
 function simulateNgnDeposit(contractId, defaultAmount){
   showToast('Fetching the exact amount due...');
   api('/v1/contracts/' + contractId + '/amount-due').then(function(breakdown){
-    var lines = [
-      'Salary: ₦' + breakdown.salary_naira.toLocaleString(),
-      'Service fee: ₦' + breakdown.service_fee_naira.toLocaleString(),
-    ];
+    var lines = [];
+    if(breakdown.last_payment){
+      lines.push('✓ Period #' + breakdown.last_payment.period_number + ' already paid — ₦' + breakdown.last_payment.total_naira.toLocaleString() + (breakdown.last_payment.insurance_included ? ' (incl. insurance)' : '') + ' on ' + new Date(breakdown.last_payment.paid_at).toLocaleDateString());
+      lines.push('');
+    }
+    lines.push('Salary: ₦' + breakdown.salary_naira.toLocaleString());
+    lines.push('Service fee: ₦' + breakdown.service_fee_naira.toLocaleString());
     if(breakdown.insurance_due_this_cycle){
       lines.push('Insurance (due this cycle' + (breakdown.insurance_is_live_quote ? ', live quote' : ', estimate') + '): ₦' + breakdown.insurance_naira.toLocaleString());
     } else {

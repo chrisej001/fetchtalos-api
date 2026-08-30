@@ -199,6 +199,7 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
         <div class="form-grid">
           <div class="field"><label>Talent</label><select id="simTalent"><option value="">Select a talent…</option></select></div>
           <div class="field"><label>Employer / company name</label><input id="simEmployer" placeholder="e.g. Acme Corp" value="Acme Corp"></div>
+          <div class="field"><label>Employer HR/finance contact email</label><input id="simEmployerEmail" type="email" placeholder="e.g. hr@acmecorp.com"></div>
           <div class="field"><label>Role title</label><input id="simRole" placeholder="e.g. Backend Engineer" value="Backend Engineer"></div>
           <div class="field"><label>Coverage plan</label><select id="simPlan"><option value="">Select a plan…</option></select></div>
           <div class="field"><label>Coverage duration (renewal cycle)</label>
@@ -539,6 +540,7 @@ function updateSimPlanDetails(){
 document.getElementById('simEngageBtn').onclick = async function(){
   const talent_id = document.getElementById('simTalent').value;
   const employer_name = document.getElementById('simEmployer').value.trim();
+  const employer_email = document.getElementById('simEmployerEmail').value.trim();
   const role_title = document.getElementById('simRole').value.trim();
   const coverage_plan = document.getElementById('simPlan').value;
   const coverage_months = parseInt(document.getElementById('simDuration').value) || 12;
@@ -549,13 +551,14 @@ document.getElementById('simEngageBtn').onclick = async function(){
 
   if(!talent_id){ showToast('Select a talent', true); return; }
   if(!employer_name || !role_title){ showToast('Employer name and role are required', true); return; }
+  if(!employer_email){ showToast('Employer HR/finance contact email is required — this is who gets payment reminders', true); return; }
   if(!coverage_plan){ showToast('Select a coverage plan', true); return; }
   if(!proposed_amount || proposed_amount <= 0){ showToast('Enter a valid salary', true); return; }
   if(!kpis.length){ showToast('At least one KPI is required — every job comes with one', true); return; }
 
   try{
     const eng = await api('/v1/engagements/create', { method:'POST', body: JSON.stringify({
-      talent_id, employer_name, role_title, coverage_plan,
+      talent_id, employer_name, employer_email, role_title, coverage_plan,
       employer_country: 'NG', employer_currency: 'NGN',
       coverage_months, proposed_amount, interview_link, kpis,
     })});
@@ -641,8 +644,12 @@ async function renderSimContracts(){
           ? `<div class="calc-row"><span>Health coverage</span><span style="color:var(--teal);">${c.coverage_policy_id||'active'}${c.coverage_policy_document_url ? ' — <a href="'+c.coverage_policy_document_url+'" target="_blank" style="color:var(--amber);">policy document</a>' : ' (document pending)'}</span></div>`
           : '';
         body = b ? `
+          ${b.last_payment ? `
+          <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg-raised);border-radius:6px;font-size:12px;color:var(--text-muted);">
+            ✓ Period #${b.last_payment.period_number} paid — ₦${b.last_payment.total_naira.toLocaleString()}${b.last_payment.insurance_included ? ' (incl. insurance)' : ''} on ${new Date(b.last_payment.paid_at).toLocaleDateString()}
+          </div>` : ''}
           <div style="margin-bottom:12px;">
-            <div style="font-size:11px;color:var(--text-faint);margin-bottom:3px;">PAY TO</div>
+            <div style="font-size:11px;color:var(--text-faint);margin-bottom:3px;">PAY TO${b.next_payment_due_date ? ' — NEXT DUE ' + new Date(b.next_payment_due_date).toLocaleDateString().toUpperCase() : ''}</div>
             <div class="mono" style="font-size:14px;color:var(--purple);">${c.ngn_account_number} — ${c.ngn_bank_name}</div>
           </div>
           <div class="calc">
