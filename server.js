@@ -1039,19 +1039,36 @@ async function simulateNgnFunding({ talent_ref, amount_naira }) {
  * and the contract is flagged clearly — never guess or send a partial,
  * wrong amount.
  */
+/**
+ * The single source of truth for "what does this contract owe THIS
+ * cycle" — used both to DISPLAY the amount to an enterprise before they
+ * ever wire anything, and internally by settleNgnPayment to compute the
+ * real split. Deliberately pure/read-only: no purchase, no balance check,
+ * no side effects — just the math, so the number shown and the number
+ * actually charged can never drift apart from each other.
+ */
+function computeAmountDueThisCycle(contract, talent) {
+  const alreadyPaidCount = [...db.payPeriods.values()].filter(p => p.contract_id === contract.contract_id && p.paid_at).length;
+  const cycleMonths = Number(contract.coverage_months) || 1;
+  const isInsuranceRenewalDue = alreadyPaidCount % cycleMonths === 0;
+
+  const salaryNaira = Number(contract.proposed_amount) || 0;
+  const platformFeeNaira = +(salaryNaira * PLATFORM_FEE_BPS / 10000).toFixed(2);
+
+  const hubKeyRecord = Object.values(KEYS).find(k => k.type === 'hub' && k.hub_scope === talent?.pipeline);
+  const hubMarkupBps = hubKeyRecord?.hub_markup_bps || 0;
+  const hubMarkupNaira = hubMarkupBps > 0 ? +(salaryNaira * hubMarkupBps / 10000).toFixed(2) : 0;
+  const hubSettlement = hubKeyRecord?.hub_settlement_account || null;
+
+  return { alreadyPaidCount, cycleMonths, isInsuranceRenewalDue, salaryNaira, platformFeeNaira, hubMarkupBps, hubMarkupNaira, hubSettlement };
+}
+
 async function settleNgnPayment(contract) {
   const talent = db.talents.find(t => t.talent_id === contract.talent_id);
   if (!talent) return { ngn_settlement_note: 'talent_not_found' };
 
+  const { isInsuranceRenewalDue, salaryNaira, platformFeeNaira, hubMarkupBps, hubMarkupNaira, hubSettlement } = computeAmountDueThisCycle(contract, talent);
   const alreadyPaidCount = [...db.payPeriods.values()].filter(p => p.contract_id === contract.contract_id && p.paid_at).length;
-
-  // Insurance doesn't just charge once — it renews on the SAME cycle as
-  // the coverage duration itself. 12 months -> renews on payment 1, then
-  // again on payment 13 (the first payment of year 2). 1 month -> renews
-  // EVERY payment. 3 or 6 -> every 3rd/6th payment. This is why
-  // coverage_months isn't just a label — it's the actual renewal clock.
-  const cycleMonths = Number(contract.coverage_months) || 1;
-  const isInsuranceRenewalDue = alreadyPaidCount % cycleMonths === 0;
   const isFirstPayment = alreadyPaidCount === 0; // still needed below for the pay-period email copy — a renewal on payment 13 is NOT "first payment"
 
   if (isInsuranceRenewalDue) {
@@ -1089,14 +1106,6 @@ async function settleNgnPayment(contract) {
   } catch (err) {
     return { ngn_settlement_status: 'balance_check_failed', ngn_settlement_note: err.message };
   }
-
-  const salaryNaira = Number(contract.proposed_amount) || 0;
-  const platformFeeNaira = +(salaryNaira * PLATFORM_FEE_BPS / 10000).toFixed(2);
-
-  const hubKeyRecord = Object.values(KEYS).find(k => k.type === 'hub' && k.hub_scope === talent.pipeline);
-  const hubMarkupBps = hubKeyRecord?.hub_markup_bps || 0;
-  const hubMarkupNaira = hubMarkupBps > 0 ? +(salaryNaira * hubMarkupBps / 10000).toFixed(2) : 0;
-  const hubSettlement = hubKeyRecord?.hub_settlement_account || null;
 
   const currentBalanceNaira = currentBalanceKobo / 100;
   // The talent's salary is a FIXED, PROTECTED amount — never computed as
@@ -2462,11 +2471,25 @@ app.post('/v1/engagements/:id/contract', async (req, res) => {
 
 // GET /v1/contracts/:id/accept — TALENT-facing, public, no API key. THIS is
 // the only place a talent's status is allowed to flip to "engaged".
+// Major Nigerian banks whose CBN codes are long-established and stable —
+// deliberately NOT including newer digital/fintech banks (Kuda, Opay,
+// PalmPay, Moniepoint etc.), since those have had code reissues and I
+// don't have confident, current knowledge of their exact codes. Anyone
+// whose bank isn't here falls through to "Other" and enters it manually —
+// better to be honest about the gap than silently guess a wrong code.
+const NIGERIA_BANKS = [
+  ['044', 'Access Bank'], ['063', 'Access Bank (Diamond)'], ['050', 'Ecobank Nigeria'],
+  ['070', 'Fidelity Bank'], ['011', 'First Bank of Nigeria'], ['214', 'First City Monument Bank (FCMB)'],
+  ['058', 'Guaranty Trust Bank (GTBank)'], ['082', 'Keystone Bank'], ['076', 'Polaris Bank'],
+  ['221', 'Stanbic IBTC Bank'], ['232', 'Sterling Bank'], ['032', 'Union Bank'],
+  ['033', 'United Bank for Africa (UBA)'], ['215', 'Unity Bank'], ['035', 'Wema Bank'],
+  ['057', 'Zenith Bank'], ['090175', 'Rubies MFB'],
+];
+
 function renderKycForm(contract, missingFields, token) {
   const PLACEHOLDERS = {
     rubies_account_name: 'e.g. Felix Okoye',
     rubies_account_number: 'e.g. 0123456789',
-    rubies_bank_code: 'e.g. 058',
     bvn: 'e.g. 22222222222',
     customer_phone: 'e.g. 08012345678',
     phone: 'e.g. 08012345678',
@@ -2490,6 +2513,22 @@ function renderKycForm(contract, missingFields, token) {
     if (f === 'address') {
       return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
         <textarea name="${f}" required placeholder="${placeholder}" style="padding:8px;width:320px;max-width:90vw;font-size:14px;height:60px;"></textarea>`;
+    }
+    if (f === 'rubies_bank_code') {
+      // Most people know their bank's NAME, not its CBN code — asking for
+      // the raw code directly was bad UX (real complaint, real fix). This
+      // picks the code automatically from a bank-name dropdown; anyone
+      // whose bank isn't in the list can still enter a code manually via
+      // the "Other" option, which reveals a plain text fallback input.
+      const options = NIGERIA_BANKS.map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
+      return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">Your bank</label>
+        <select id="bankSelect" onchange="document.getElementById('bankCodeManual').style.display = this.value === 'other' ? 'block' : 'none'; document.getElementById('bankCodeManual').required = this.value === 'other'; document.getElementById('bankCodeHidden').value = this.value === 'other' ? '' : this.value;" style="padding:8px;width:336px;max-width:90vw;font-size:14px;">
+          <option value="">Select your bank…</option>
+          ${options}
+          <option value="other">Other (not listed — I'll enter the code)</option>
+        </select>
+        <input type="hidden" name="${f}" id="bankCodeHidden">
+        <input id="bankCodeManual" type="text" placeholder="Your bank's CBN code — ask your bank if unsure" style="display:none;margin-top:8px;padding:8px;width:320px;max-width:90vw;font-size:14px;" oninput="document.getElementById('bankCodeHidden').value = this.value;">`;
     }
     const type = f === 'date_of_birth' || f === 'customer_dob' ? 'date' : 'text';
     return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
@@ -2559,32 +2598,42 @@ async function finalizeContractAcceptance(contract) {
 async function sendWelcomeEmail(contract, talent) {
   if (!talent?.email) return { sent: false, reason: 'talent_missing_email' };
 
+  const isNgnFlow = contract.employer_currency === 'NGN';
+
   const coverageLine = contract.coverage_status === 'active'
     ? `<li><b>Health coverage:</b> Active — policy ${contract.coverage_policy_id || ''}</li>`
     : contract.coverage_status && contract.coverage_status !== 'not_yet_purchased'
       ? `<li><b>Health coverage:</b> ${contract.coverage_status}${contract.coverage_note ? ' — ' + contract.coverage_note : ''}</li>`
-      : '';
+      : isNgnFlow
+        ? `<li><b>Health coverage:</b> activates automatically with your first payment — no action needed from you.</li>`
+        : '';
   const salaryLine = contract.salary_status === 'va_issued'
     ? `<li><b>Salary account:</b> ${contract.salary_va_account_number} — ${contract.salary_va_bank_name}, routing ${contract.salary_va_routing_number}</li>`
     : contract.salary_status && contract.salary_status !== 'not_yet_purchased'
       ? `<li><b>Salary account:</b> ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}</li>`
-      : '';
+      : isNgnFlow
+        ? `<li><b>Salary:</b> paid automatically to the bank account you provided, every pay period — nothing further to set up.</li>`
+        : '';
   // NGN-flow talents deliberately don't see the intermediate pass-through
   // account at all here — it's internal plumbing, not something they need
   // to act on or check. Their real, actionable destination is the bank
   // account they themselves submitted at KYC, which is where their actual
   // salary lands every pay period. Onboarding status is FetchTalos's own
   // concern to monitor (see the admin console's NGN Rail tab), not the
-  // talent's.
+  // talent's. The two fallback lines above exist so this email never
+  // renders as an empty, half-finished-looking list before the first
+  // payment cycle — a real gap that made the email feel broken.
 
   return sendEmail({
     to: talent.email,
-    subject: `Welcome aboard, ${contract.talent_name} — your account details`,
+    subject: `Welcome aboard, ${contract.talent_name} — you're all set with ${contract.employer_name}`,
     html: `<p>Hi ${contract.talent_name},</p>
-      <p>Your contract with ${contract.employer_name} is now active. Here's what's set up for you:</p>
+      <p>Congratulations — your contract with <b>${contract.employer_name}</b> for the <b>${contract.role_title || 'role'}</b> position is now active. Here's a quick summary of what's set up on your behalf:</p>
       <ul>${coverageLine}${salaryLine}</ul>
-      <p>Keep this email — it's your record of both.</p>
-      <p>— FetchTalos</p>`
+      <p>Everything above runs automatically from here — you won't need to submit any further details or take any action for either your pay or your coverage to keep working.</p>
+      <p>If anything looks off, or you have questions about your contract, reach out to your employer directly, or reply to this email and we'll help sort it out.</p>
+      <p>Welcome aboard, and congratulations again on the new role.</p>
+      <p>— The FetchTalos Team</p>`
   });
 }
 
@@ -2738,6 +2787,61 @@ app.get('/v1/contracts/:id/pay-periods', (req, res) => {
     .sort((a, b) => a.period_number - b.period_number)
     .map(p => ({ ...p, status: payPeriodStatus(p) }));
   res.json({ count: periods.length, results: periods });
+});
+
+// GET /v1/contracts/:id/amount-due — the exact total to wire THIS cycle,
+// not an estimate the enterprise has to reconstruct themselves from a
+// salary figure and a fee percentage. Uses computeAmountDueThisCycle,
+// the SAME function settleNgnPayment itself uses internally — the number
+// shown here and the number actually split/settled can never disagree.
+// Insurance amount tries a live quote first (like the Plans calculator),
+// falling back to the catalog estimate if that's not available, and is
+// only included at all on a cycle where it's actually due.
+app.get('/v1/contracts/:id/amount-due', async (req, res) => {
+  const contract = db.contracts.get(req.params.id);
+  if (!contract || contract.client_id !== req.clientId) return res.status(404).json({ error: 'contract_not_found' });
+  if (contract.employer_currency !== 'NGN') return res.status(400).json({ error: 'ngn_flow_only', message: 'This breakdown only applies to NGN-flow contracts.' });
+  const talent = db.talents.find(t => t.talent_id === contract.talent_id);
+
+  const breakdown = computeAmountDueThisCycle(contract, talent);
+  let insuranceNaira = 0;
+  let insuranceIsLiveQuote = false;
+  if (breakdown.isInsuranceRenewalDue) {
+    const quote = await quoteInsuranceNgn({ plan: contract.coverage_plan, coverage_months: contract.coverage_months });
+    if (quote.premium_naira != null) {
+      insuranceNaira = quote.premium_naira;
+      insuranceIsLiveQuote = true;
+    } else {
+      // Live quote failed or its shape isn't confirmed yet — fall back to
+      // the catalog estimate rather than silently showing ₦0 for
+      // insurance while still saying it's due. Understating the total on
+      // exactly the cycle where insurance is charged would be worse than
+      // an approximate-but-honest number.
+      try {
+        const catalog = await listInsuranceProductsNgn();
+        const products = catalog.products || catalog.data || catalog;
+        const productId = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
+        const product = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
+        insuranceNaira = koboFieldToNaira(product, 'base_premium', 'base_premium_naira') || 0;
+      } catch (err) { /* leaves insuranceNaira at 0 — genuinely nothing to go on */ }
+    }
+  }
+
+  const total = breakdown.salaryNaira + breakdown.platformFeeNaira + breakdown.hubMarkupNaira + insuranceNaira;
+
+  res.json({
+    contract_id: contract.contract_id,
+    salary_naira: breakdown.salaryNaira,
+    platform_fee_naira: breakdown.platformFeeNaira,
+    hub_markup_naira: breakdown.hubMarkupNaira,
+    insurance_due_this_cycle: breakdown.isInsuranceRenewalDue,
+    insurance_naira: insuranceNaira,
+    insurance_is_live_quote: insuranceIsLiveQuote,
+    total_naira: total,
+    pay_to_account_number: contract.ngn_account_number || null,
+    pay_to_bank_name: contract.ngn_bank_name || null,
+    ngn_status: contract.ngn_status || null,
+  });
 });
 
 // POST /v1/contracts/:id/simulate-deposit — test-mode only. This

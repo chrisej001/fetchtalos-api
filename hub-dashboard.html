@@ -649,13 +649,28 @@ async function renderSimContracts(){
 document.getElementById('refreshSimContractsBtn').onclick = renderSimContracts;
 
 window.simDeposit = async function(contractId, defaultAmount){
-  const amountStr = prompt('Amount to simulate wiring (₦), test mode only:', defaultAmount || 300000);
-  if(!amountStr) return;
-  const amount_naira = parseFloat(amountStr);
-  if(isNaN(amount_naira) || amount_naira <= 0){ showToast('Enter a valid amount', true); return; }
+  let breakdown;
   try{
-    await api(`/v1/contracts/${contractId}/simulate-deposit`, { method:'POST', body: JSON.stringify({ amount_naira }) });
-    showToast('Wired — Felicity is delivering the real webhook now, refreshing shortly');
+    breakdown = await api(`/v1/contracts/${contractId}/amount-due`);
+  }catch(err){ showToast('Failed to fetch the amount due: ' + err.message, true); return; }
+
+  const lines = [
+    'Salary: ₦' + breakdown.salary_naira.toLocaleString(),
+    'FetchTalos platform fee: ₦' + breakdown.platform_fee_naira.toLocaleString(),
+  ];
+  if(breakdown.hub_markup_naira > 0) lines.push('Hub markup: ₦' + breakdown.hub_markup_naira.toLocaleString());
+  lines.push(breakdown.insurance_due_this_cycle
+    ? 'Insurance (due this cycle' + (breakdown.insurance_is_live_quote ? ', live quote' : ', estimate') + '): ₦' + breakdown.insurance_naira.toLocaleString()
+    : 'Insurance: not due this cycle');
+  lines.push('');
+  lines.push('TOTAL TO WIRE: ₦' + breakdown.total_naira.toLocaleString());
+  lines.push('');
+  lines.push('Simulate wiring this exact amount now?');
+  if(!confirm(lines.join('\n'))) return;
+
+  try{
+    await api(`/v1/contracts/${contractId}/simulate-deposit`, { method:'POST', body: JSON.stringify({ amount_naira: breakdown.total_naira }) });
+    showToast('Wired ₦' + breakdown.total_naira.toLocaleString() + ' — Felicity is delivering the real webhook now, refreshing shortly');
     setTimeout(renderSimContracts, 4000);
   }catch(err){ showToast('Simulate deposit failed: ' + err.message, true); }
 };

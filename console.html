@@ -565,16 +565,36 @@ function simulateContractAccept(contractId, token){
 // asynchronously — the result of this call never shows the final
 // settlement, so it refreshes the table a few seconds later to catch it.
 function simulateNgnDeposit(contractId, defaultAmount){
-  var amountStr = prompt('Amount to simulate wiring (₦), test mode only:', defaultAmount || 300000);
-  if(!amountStr) return;
-  var amount_naira = parseFloat(amountStr);
-  if(isNaN(amount_naira) || amount_naira <= 0){ showToast('Enter a valid amount', true); return; }
-  api('/v1/contracts/' + contractId + '/simulate-deposit', { method:'POST', body: JSON.stringify({ amount_naira: amount_naira }) })
-    .then(function(){
-      showToast('Wired — Felicity is delivering the real webhook now, refreshing shortly');
-      setTimeout(renderContracts, 4000);
-    })
-    .catch(function(err){ showToast('Simulate deposit failed: ' + err.message, true); });
+  showToast('Fetching the exact amount due...');
+  api('/v1/contracts/' + contractId + '/amount-due').then(function(breakdown){
+    var lines = [
+      'Salary: ₦' + breakdown.salary_naira.toLocaleString(),
+      'FetchTalos platform fee: ₦' + breakdown.platform_fee_naira.toLocaleString(),
+    ];
+    if(breakdown.hub_markup_naira > 0) lines.push('Hub markup: ₦' + breakdown.hub_markup_naira.toLocaleString());
+    if(breakdown.insurance_due_this_cycle){
+      lines.push('Insurance (due this cycle' + (breakdown.insurance_is_live_quote ? ', live quote' : ', estimate') + '): ₦' + breakdown.insurance_naira.toLocaleString());
+    } else {
+      lines.push('Insurance: not due this cycle');
+    }
+    lines.push('');
+    lines.push('TOTAL TO WIRE: ₦' + breakdown.total_naira.toLocaleString());
+    lines.push('');
+    lines.push('Simulate wiring this exact amount now?');
+
+    if(!confirm(lines.join('\n'))) return;
+
+    // The exact computed total is what gets sent — never re-typed, never
+    // re-entered, no room for the enterprise (or this simulation) to wire
+    // the wrong figure. This is the whole point: the number shown and the
+    // number sent are always the same number.
+    api('/v1/contracts/' + contractId + '/simulate-deposit', { method:'POST', body: JSON.stringify({ amount_naira: breakdown.total_naira }) })
+      .then(function(){
+        showToast('Wired ₦' + breakdown.total_naira.toLocaleString() + ' — Felicity is delivering the real webhook now, refreshing shortly');
+        setTimeout(renderContracts, 4000);
+      })
+      .catch(function(err){ showToast('Simulate deposit failed: ' + err.message, true); });
+  }).catch(function(err){ showToast('Failed to fetch the amount due: ' + err.message, true); });
 }
 
 /* PAYROLL - only ACTIVE contracts */
