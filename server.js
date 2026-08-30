@@ -25,6 +25,7 @@ app.use(express.urlencoded({ extended: true })); // needed for the talent-facing
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 app.get('/hub', (req, res) => res.sendFile(path.join(__dirname, 'hub-dashboard.html')));
+app.get('/docs', (req, res) => res.sendFile(path.join(__dirname, 'docs.html')));
 
 /* ---------------------------------------------------------------------- *
  * AUTH — Stripe/Paystack-style bearer key. Two key TYPES now exist:

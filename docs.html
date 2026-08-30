@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FetchTalos API Reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #090b10;
+    --bg-elevated: #12151c;
+    --bg-elevated-2: #171b24;
+    --line: #232834;
+    --line-soft: #1b1f29;
+    --teal: #2fe6c6;
+    --teal-dim: #1c8f7d;
+    --orange: #ff8a4c;
+    --orange-dim: #b5622f;
+    --text: #f2f5f7;
+    --text-muted: #97a1b0;
+    --text-faint: #5b6472;
+    --display: 'Bricolage Grotesque', sans-serif;
+    --body: 'IBM Plex Sans', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+    --max: 1320px;
+  }
+  *{ margin:0; padding:0; box-sizing:border-box; }
+  html{ scroll-behavior:smooth; }
+  body{
+    background:var(--bg); color:var(--text); font-family:var(--body);
+    line-height:1.6; -webkit-font-smoothing:antialiased; overflow-x:hidden;
+  }
+  ::selection{ background:var(--teal); color:#04140f; }
+  a{ color:inherit; text-decoration:none; }
+  .wrap{ max-width:var(--max); margin:0 auto; padding:0 32px; }
+  @media (max-width:640px){ .wrap{ padding:0 18px; } }
+
+  .eyebrow{
+    font-family:var(--mono); font-size:12px; font-weight:500; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--teal); display:inline-flex; align-items:center; gap:8px;
+  }
+  .eyebrow::before{ content:''; width:6px; height:6px; border-radius:50%; background:var(--teal); box-shadow:0 0 0 3px rgba(47,230,198,0.15); }
+  .eyebrow.o{ color:var(--orange); } .eyebrow.o::before{ background:var(--orange); box-shadow:0 0 0 3px rgba(255,138,76,0.15); }
+
+  h1,h2,h3,h4{ font-family:var(--display); font-weight:700; letter-spacing:-.01em; }
+
+  /* ---------- nav ---------- */
+  header{ position:sticky; top:0; z-index:60; background:rgba(9,11,16,.85); backdrop-filter:blur(14px); border-bottom:1px solid var(--line-soft); }
+  nav{ display:flex; align-items:center; justify-content:space-between; padding:16px 0; }
+  .brand{ display:flex; align-items:center; gap:10px; font-family:var(--display); font-weight:700; font-size:17px; }
+  .brand svg{ width:26px; height:26px; flex-shrink:0; }
+  .brand .tag{ font-family:var(--mono); font-size:10.5px; color:var(--text-faint); font-weight:500; border:1px solid var(--line); border-radius:100px; padding:2px 8px; margin-left:2px; }
+  .nav-links{ display:flex; align-items:center; gap:28px; font-size:13.5px; color:var(--text-muted); }
+  .nav-links a:hover{ color:var(--text); }
+  .nav-cta{ font-family:var(--mono); font-size:12.5px; font-weight:500; background:var(--teal); color:#04140f; padding:9px 16px; border-radius:8px; white-space:nowrap; }
+  .menu-toggle{ display:none; background:none; border:1px solid var(--line); color:var(--text); border-radius:7px; width:36px; height:36px; align-items:center; justify-content:center; cursor:pointer; }
+  @media (max-width:900px){ .nav-links{ display:none; } .menu-toggle{ display:flex; } }
+
+  /* ---------- hero ---------- */
+  .doc-hero{ padding:56px 0 40px; border-bottom:1px solid var(--line-soft); }
+  .doc-hero h1{ font-size:clamp(30px,4.4vw,46px); line-height:1.06; margin:18px 0 14px; max-width:760px; }
+  .doc-hero p{ color:var(--text-muted); font-size:16px; max-width:620px; line-height:1.7; margin-bottom:28px; }
+  .hero-facts{ display:flex; flex-wrap:wrap; gap:12px; }
+  .fact{ display:flex; align-items:center; gap:10px; background:var(--bg-elevated); border:1px solid var(--line); border-radius:10px; padding:10px 14px; font-family:var(--mono); font-size:12.5px; }
+  .fact .l{ color:var(--text-faint); }
+  .fact .v{ color:var(--text); }
+  .fact button.copy{ background:none; border:1px solid var(--line); color:var(--text-muted); border-radius:5px; padding:3px 7px; font-size:10.5px; font-family:var(--mono); cursor:pointer; }
+  .fact button.copy:hover{ color:var(--teal); border-color:var(--teal-dim); }
+
+  /* ---------- layout ---------- */
+  .doc-layout{ display:grid; grid-template-columns:250px 1fr; gap:56px; padding:44px 0 100px; align-items:start; }
+  @media (max-width:980px){ .doc-layout{ grid-template-columns:1fr; } }
+
+  .toc{ position:sticky; top:78px; max-height:calc(100vh - 100px); overflow-y:auto; padding-right:8px; }
+  .toc::-webkit-scrollbar{ width:5px; } .toc::-webkit-scrollbar-thumb{ background:var(--line); border-radius:10px; }
+  .toc-group{ margin-bottom:22px; }
+  .toc-group-label{ font-family:var(--mono); font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-faint); margin-bottom:8px; padding-left:2px; }
+  .toc a{ display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted); padding:6px 8px; border-radius:6px; line-height:1.3; }
+  .toc a:hover{ color:var(--text); background:var(--bg-elevated); }
+  .toc a.active{ color:var(--text); background:var(--bg-elevated-2); }
+  .toc .m{ font-family:var(--mono); font-size:9px; font-weight:600; padding:1.5px 5px; border-radius:4px; flex-shrink:0; }
+  .m-get{ background:rgba(47,230,198,.12); color:var(--teal); }
+  .m-post{ background:rgba(255,138,76,.14); color:var(--orange); }
+  .m-patch{ background:rgba(255,138,76,.14); color:var(--orange); }
+  .m-delete{ background:rgba(255,138,76,.14); color:var(--orange); }
+  @media (max-width:980px){ .toc{ position:static; max-height:none; margin-bottom:20px; } }
+
+  .content section.doc-section{ margin-bottom:64px; scroll-margin-top:90px; }
+  .doc-section > h2{ font-size:24px; margin-bottom:6px; }
+  .doc-section > .section-sub{ color:var(--text-muted); font-size:14.5px; margin-bottom:28px; max-width:680px; line-height:1.7; }
+
+  .endpoint{ border:1px solid var(--line); border-radius:14px; background:var(--bg-elevated); padding:26px 28px 28px; margin-bottom:20px; scroll-margin-top:90px; }
+  .endpoint-head{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .method{ font-family:var(--mono); font-size:11.5px; font-weight:600; padding:3px 9px; border-radius:6px; letter-spacing:.03em; }
+  .method.get{ background:rgba(47,230,198,.12); color:var(--teal); border:1px solid rgba(47,230,198,.28); }
+  .method.post,.method.patch,.method.delete{ background:rgba(255,138,76,.13); color:var(--orange); border:1px solid rgba(255,138,76,.28); }
+  .path{ font-family:var(--mono); font-size:14.5px; color:var(--text); }
+  .auth-pill{ margin-left:auto; font-family:var(--mono); font-size:10.5px; color:var(--text-faint); border:1px solid var(--line); border-radius:100px; padding:3px 10px; white-space:nowrap; }
+  .auth-pill.hub{ color:var(--orange); border-color:rgba(255,138,76,.3); }
+  .auth-pill.ent{ color:var(--teal); border-color:rgba(47,230,198,.3); }
+  .auth-pill.public{ color:var(--text-muted); }
+  .endpoint-desc{ color:var(--text-muted); font-size:14.5px; line-height:1.7; margin:12px 0 18px; }
+  .endpoint-desc code{ font-family:var(--mono); font-size:12.5px; background:var(--bg-elevated-2); border:1px solid var(--line); border-radius:4px; padding:1px 6px; color:var(--text); }
+
+  .subhead{ font-family:var(--mono); font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-faint); margin:20px 0 10px; }
+  .ptable{ width:100%; border-collapse:collapse; font-size:13px; margin-bottom:4px; }
+  .ptable th{ text-align:left; font-family:var(--mono); font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-faint); padding:0 10px 8px 0; font-weight:500; }
+  .ptable td{ padding:9px 10px 9px 0; border-top:1px solid var(--line-soft); vertical-align:top; }
+  .ptable .pname{ font-family:var(--mono); color:var(--text); white-space:nowrap; }
+  .ptable .ptype{ font-family:var(--mono); color:var(--teal-dim); white-space:nowrap; font-size:11.5px; }
+  .ptable .preq{ font-family:var(--mono); font-size:10px; white-space:nowrap; }
+  .ptable .preq.y{ color:var(--orange); } .ptable .preq.n{ color:var(--text-faint); }
+  .ptable .pdesc{ color:var(--text-muted); line-height:1.55; }
+
+  .code-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:6px; }
+  @media (max-width:760px){ .code-grid{ grid-template-columns:1fr; } }
+  .code-block{ background:#06070a; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .code-block .cb-head{ display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid var(--line-soft); }
+  .code-block .cb-label{ font-family:var(--mono); font-size:10.5px; color:var(--text-faint); letter-spacing:.04em; text-transform:uppercase; }
+  .code-block .cb-copy{ background:none; border:none; color:var(--text-faint); cursor:pointer; font-family:var(--mono); font-size:10.5px; }
+  .code-block .cb-copy:hover{ color:var(--teal); }
+  .code-block pre{ margin:0; padding:14px; overflow-x:auto; font-family:var(--mono); font-size:12px; line-height:1.65; color:#c9d1d9; }
+  .tok-key{ color:#7ee7d8; } .tok-str{ color:#ffb787; } .tok-num{ color:#c4a2f0; } .tok-bool{ color:#ff8a4c; } .tok-c{ color:#5b6472; font-style:italic; }
+
+  .note{ display:flex; gap:11px; background:rgba(255,138,76,.06); border:1px solid rgba(255,138,76,.22); border-radius:10px; padding:13px 15px; margin-top:16px; font-size:13px; color:var(--text-muted); line-height:1.65; }
+  .note.info{ background:rgba(47,230,198,.06); border-color:rgba(47,230,198,.22); }
+  .note .dot{ flex-shrink:0; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:10px; font-weight:700; margin-top:1px; }
+  .note.warn .dot{ background:rgba(255,138,76,.18); color:var(--orange); }
+  .note.info .dot{ background:rgba(47,230,198,.18); color:var(--teal); }
+  .note b{ color:var(--text); }
+
+  .errors-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+  .err-card{ background:var(--bg-elevated); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .err-card .code{ font-family:var(--mono); font-size:13px; color:var(--orange); margin-bottom:4px; }
+  .err-card .desc{ font-size:12.5px; color:var(--text-muted); line-height:1.6; }
+
+  .flow-steps{ display:flex; flex-direction:column; gap:0; margin:24px 0 8px; border-left:2px solid var(--line); padding-left:24px; }
+  .flow-step{ position:relative; padding-bottom:26px; }
+  .flow-step:last-child{ padding-bottom:0; }
+  .flow-step::before{ content:''; position:absolute; left:-29.5px; top:2px; width:11px; height:11px; border-radius:50%; background:var(--bg); border:2px solid var(--teal); }
+  .flow-step .fs-title{ font-family:var(--mono); font-size:12.5px; color:var(--text); margin-bottom:3px; }
+  .flow-step .fs-title .path{ color:var(--teal); }
+  .flow-step .fs-desc{ font-size:13px; color:var(--text-muted); line-height:1.6; max-width:600px; }
+
+  footer{ border-top:1px solid var(--line-soft); padding:40px 0; }
+  .footer-inner{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; font-size:13px; color:var(--text-faint); }
+  .footer-inner a{ color:var(--text-muted); }
+  .footer-inner a:hover{ color:var(--text); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <nav>
+      <a href="/" class="brand">
+        <svg viewBox="0 0 26 26" fill="none">
+          <circle cx="6" cy="13" r="5" stroke="#2fe6c6" stroke-width="2"/>
+          <circle cx="6" cy="13" r="1.5" fill="#2fe6c6"/>
+          <line x1="11" y1="13" x2="15" y2="13" stroke="#3a4150" stroke-width="2"/>
+          <circle cx="20" cy="13" r="5" stroke="#ff8a4c" stroke-width="2"/>
+          <circle cx="20" cy="13" r="1.5" fill="#ff8a4c"/>
+        </svg>
+        FetchTalos <span class="tag">API Reference</span>
+      </a>
+      <div class="nav-links">
+        <a href="#getting-started">Getting Started</a>
+        <a href="#discovery">Discovery</a>
+        <a href="#hiring">Hiring</a>
+        <a href="#payroll">Payroll</a>
+        <a href="#hub">Hub Self-Service</a>
+        <a href="/hub">Hub login</a>
+      </div>
+      <a href="/#cta" class="nav-cta">Request API access →</a>
+    </nav>
+  </div>
+</header>
+
+<section class="doc-hero">
+  <div class="wrap">
+    <div class="eyebrow">API REFERENCE · v1</div>
+    <h1>Everything you need to build on FetchTalos.</h1>
+    <p>Every endpoint below is real and live on this server — discovery, hiring, payroll, insurance, and hub self-service. No placeholders, nothing aspirational: what's documented here is what the API actually does today, including the honest edges.</p>
+    <div class="hero-facts">
+      <div class="fact"><span class="l">Base URL</span><span class="v" id="baseUrlText">https://fetchtalos.onrender.com</span><button class="copy" onclick="copyText('baseUrlText', this)">Copy</button></div>
+      <div class="fact"><span class="l">Auth</span><span class="v">Authorization: Bearer &lt;key&gt;</span></div>
+      <div class="fact"><span class="l">Format</span><span class="v">JSON in / JSON out</span></div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap">
+  <div class="doc-layout">
+
+    <!-- ============ TOC ============ -->
+    <aside class="toc" id="toc">
+      <div class="toc-group">
+        <div class="toc-group-label">Getting Started</div>
+        <a href="#getting-started">Overview</a>
+        <a href="#authentication">Authentication</a>
+        <a href="#errors">Errors</a>
+      </div>
+      <div class="toc-group">
+        <div class="toc-group-label">Discovery</div>
+        <a href="#discover-talents"><span class="m m-get">GET</span>talents/discover</a>
+      </div>
+      <div class="toc-group">
+        <div class="toc-group-label">Hiring flow</div>
+        <a href="#hiring">How it works</a>
+        <a href="#create-engagement"><span class="m m-post">POST</span>engagements/create</a>
+        <a href="#list-engagements"><span class="m m-get">GET</span>engagements</a>
+        <a href="#engagement-accept"><span class="m m-get">GET</span>engagements/:id/accept</a>
+        <a href="#send-contract"><span class="m m-post">POST</span>engagements/:id/contract</a>
+        <a href="#contract-accept"><span class="m m-get">GET</span>contracts/:id/accept</a>
+      </div>
+      <div class="toc-group">
+        <div class="toc-group-label">Contracts</div>
+        <a href="#list-contracts"><span class="m m-get">GET</span>contracts</a>
+        <a href="#get-contract"><span class="m m-get">GET</span>contracts/:id</a>
+        <a href="#pay-periods"><span class="m m-get">GET</span>contracts/:id/pay-periods</a>
+        <a href="#amount-due"><span class="m m-get">GET</span>contracts/:id/amount-due</a>
+        <a href="#simulate-deposit"><span class="m m-post">POST</span>contracts/:id/simulate-deposit</a>
+        <a href="#release-contract"><span class="m m-post">POST</span>contracts/:id/release</a>
+        <a href="#w8ben"><span class="m m-get">GET</span>contracts/:id/w8ben</a>
+      </div>
+      <div class="toc-group">
+        <div class="toc-group-label">Payroll &amp; ledger</div>
+        <a href="#disburse"><span class="m m-post">POST</span>payroll/disburse</a>
+        <a href="#get-payout"><span class="m m-get">GET</span>payroll/:id</a>
+        <a href="#ledger"><span class="m m-get">GET</span>ledger</a>
+        <a href="#rates"><span class="m m-get">GET</span>rates</a>
+      </div>
+      <div class="toc-group">
+        <div class="toc-group-label">Insurance plans</div>
+        <a href="#plans"><span class="m m-get">GET</span>plans</a>
+        <a href="#plans-quote"><span class="m m-get">GET</span>plans/quote</a>
+      </div>
+      <div class="toc-group">
+        <div class="toc-group-label">Hub self-service</div>
+        <a href="#hub-account"><span class="m m-get">GET</span>hub/account</a>
+        <a href="#hub-markup"><span class="m m-patch">PATCH</span>hub/markup</a>
+        <a href="#hub-settlement"><span class="m m-patch">PATCH</span>hub/settlement-account</a>
+        <a href="#hub-notification"><span class="m m-patch">PATCH</span>hub/notification-email</a>
+        <a href="#hub-stats"><span class="m m-get">GET</span>hub/stats</a>
+        <a href="#hub-roster"><span class="m m-get">GET</span>talents/roster</a>
+        <a href="#hub-upload"><span class="m m-post">POST</span>talents/upload</a>
+        <a href="#hub-patch-talent"><span class="m m-patch">PATCH</span>talents/:id</a>
+        <a href="#hub-delete-talent"><span class="m m-delete">DEL</span>talents/:id</a>
+      </div>
+      <div class="toc-group">
+        <div class="toc-group-label">System</div>
+        <a href="#health"><span class="m m-get">GET</span>health</a>
+      </div>
+    </aside>
+
+    <!-- ============ CONTENT ============ -->
+    <main class="content">
+
+      <section class="doc-section" id="getting-started">
+        <h2>Overview</h2>
+        <p class="section-sub">FetchTalos is one API across four jobs that used to need four different vendors: finding talent, generating a compliant contract, running payroll with live FX conversion, and issuing health coverage tied to that same contract. All of it is scoped by API key, so an enterprise and a hub calling the same base URL only ever see their own data.</p>
+
+        <div class="note info">
+          <div class="dot">i</div>
+          <div>Every request/response shown on this page is the <b>real</b> shape returned by the current server — copied from the actual route handlers, not written from a spec. If a field is nullable or only appears under certain conditions, that's called out explicitly.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="authentication">
+        <h2>Authentication</h2>
+        <p class="section-sub">Every <code style="font-family:var(--mono);background:var(--bg-elevated-2);border:1px solid var(--line);border-radius:4px;padding:1px 6px;">/v1/*</code> route (except the talent-facing public links) requires a bearer key.</p>
+
+        <div class="code-block" style="margin-bottom:20px;">
+          <div class="cb-head"><span class="cb-label">Header</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div>
+          <pre>Authorization: Bearer ft_test_51x9k2mq7dev</pre>
+        </div>
+
+        <div class="subhead">Key types</div>
+        <div class="errors-grid">
+          <div class="err-card">
+            <div class="code">enterprise</div>
+            <div class="desc">Sees the full shared talent pool across every hub pipeline. This is what a direct hiring employer uses.</div>
+          </div>
+          <div class="err-card">
+            <div class="code">hub</div>
+            <div class="desc">Locked to one pipeline via <code style="font-family:var(--mono);">hub_scope</code> (e.g. "ALX Africa"). Talent discovery, roster management, and self-service account routes are all silently scoped to that pipeline — a hub key can never read or write another hub's data, regardless of what a request body claims.</div>
+          </div>
+        </div>
+
+        <div class="note warn" style="margin-top:18px;">
+          <div class="dot">!</div>
+          <div>Keys aren't self-service yet — there's no public signup. <a href="/#cta" style="color:var(--orange);text-decoration:underline;">Request access</a> and FetchTalos issues you a key directly.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="errors">
+        <h2>Errors</h2>
+        <p class="section-sub">Errors are always JSON with an <code style="font-family:var(--mono);background:var(--bg-elevated-2);border:1px solid var(--line);border-radius:4px;padding:1px 6px;">error</code> slug and usually a human-readable <code style="font-family:var(--mono);background:var(--bg-elevated-2);border:1px solid var(--line);border-radius:4px;padding:1px 6px;">message</code>. There's no generic catch-all shape beyond that — each route returns the slug relevant to what actually went wrong.</p>
+        <div class="errors-grid">
+          <div class="err-card"><div class="code">401 unauthorized</div><div class="desc">Missing or invalid bearer key.</div></div>
+          <div class="err-card"><div class="code">403 hub_only</div><div class="desc">Route is restricted to hub-type keys (roster management, hub self-service).</div></div>
+          <div class="err-card"><div class="code">404 *_not_found</div><div class="desc">Resource doesn't exist, or exists but isn't scoped to your key — both return the same 404, deliberately, so you can't probe for other clients' data.</div></div>
+          <div class="err-card"><div class="code">409 conflict</div><div class="desc">Action doesn't make sense given current state — e.g. re-sending a contract that's already out, releasing an already-released contract.</div></div>
+          <div class="err-card"><div class="code">422 not_configured</div><div class="desc">The route depends on an integration (insurance, NGN rail) that isn't configured server-side yet.</div></div>
+          <div class="err-card"><div class="code">502 upstream failure</div><div class="desc">A downstream call (FX lookup, insurance provider) failed. Safe to retry.</div></div>
+        </div>
+      </section>
+
+      <!-- ============ DISCOVERY ============ -->
+      <section class="doc-section" id="discovery">
+        <h2>Talent Discovery</h2>
+        <p class="section-sub">Browse the shared talent pool. A hub key only ever sees its own pipeline; an enterprise key sees everyone.</p>
+
+        <div class="endpoint" id="discover-talents">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/talents/discover</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Search available talent. Hub-scoping is automatic and can't be overridden by query params.</div>
+          <div class="subhead">Query parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">skill</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Substring match against each talent's stack (case-insensitive) — e.g. <code style="font-family:var(--mono)">?skill=node</code>.</td></tr>
+            <tr><td class="pname">status</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Exact match on talent status, e.g. <code style="font-family:var(--mono)">available</code>.</td></tr>
+            <tr><td class="pname">region</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Country match. Best-effort — falls through to unfiltered until pipeline data carries city-level granularity.</td></tr>
+          </table>
+          <div class="code-grid">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">Request</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>curl "$BASE_URL/v1/talents/discover?skill=node" \
+  -H "Authorization: Bearer $API_KEY"</pre></div>
+            <div class="code-block"><div class="cb-head"><span class="cb-label">200 Response</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{
+  <span class="tok-key">"count"</span>: <span class="tok-num">1</span>,
+  <span class="tok-key">"results"</span>: [{
+    <span class="tok-key">"talent_id"</span>: <span class="tok-str">"tal_0x91af"</span>,
+    <span class="tok-key">"name"</span>: <span class="tok-str">"Chinedu O."</span>,
+    <span class="tok-key">"stack"</span>: [<span class="tok-str">"Node"</span>, <span class="tok-str">"Postgres"</span>, <span class="tok-str">"Go"</span>],
+    <span class="tok-key">"pipeline"</span>: <span class="tok-str">"ALX Africa"</span>,
+    <span class="tok-key">"country"</span>: <span class="tok-str">"NG"</span>,
+    <span class="tok-key">"vetted_score"</span>: <span class="tok-num">92</span>,
+    <span class="tok-key">"status"</span>: <span class="tok-str">"available"</span>
+  }],
+  <span class="tok-key">"scoped_to_hub"</span>: <span class="tok-bool">null</span>
+}</pre></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ HIRING FLOW ============ -->
+      <section class="doc-section" id="hiring">
+        <h2>The Hiring Flow</h2>
+        <p class="section-sub">Hiring is a real handshake, not one instant call — the talent has to actually confirm at two separate points before a contract goes active. Five steps, two of which are talent-facing public links (no API key, token-based, the same pattern as a DocuSign/Calendly confirmation link).</p>
+
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="fs-title">1 · <span class="path">POST /v1/engagements/create</span></div>
+            <div class="fs-desc">Enterprise sends an interview invite. Terms — currency, coverage plan, proposed salary — are captured here and carried through the rest of the flow; nothing is re-entered later.</div>
+          </div>
+          <div class="flow-step">
+            <div class="fs-title">2 · <span class="path">GET /v1/engagements/:id/accept</span> <span style="color:var(--text-faint);font-size:11px;">(public, talent-facing)</span></div>
+            <div class="fs-desc">Talent clicks the link in their email to confirm they're in for the interview.</div>
+          </div>
+          <div class="flow-step">
+            <div class="fs-title">3 · Interview happens off-platform</div>
+            <div class="fs-desc">On whatever call tool was in the invite. FetchTalos isn't a video product.</div>
+          </div>
+          <div class="flow-step">
+            <div class="fs-title">4 · <span class="path">POST /v1/engagements/:id/contract</span></div>
+            <div class="fs-desc">Enterprise moves forward. A real offer letter PDF is generated and emailed to the talent along with an accept link.</div>
+          </div>
+          <div class="flow-step">
+            <div class="fs-title">5 · <span class="path">GET /v1/contracts/:id/accept</span> <span style="color:var(--text-faint);font-size:11px;">(public, talent-facing)</span></div>
+            <div class="fs-desc">Talent accepts. Only now does the contract flip to <code style="font-family:var(--mono);">active</code> — insurance gets purchased, a salary/NUBAN account gets issued, and the first pay period opens.</div>
+          </div>
+        </div>
+
+        <div class="endpoint" id="create-engagement">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/engagements/create</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">"Engage" — sends the talent an interview invite email and locks their status to <code style="font-family:var(--mono);">interviewing</code> so nobody else can engage them mid-process.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">talent_id</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">Must be currently <code style="font-family:var(--mono)">available</code>.</td></tr>
+            <tr><td class="pname">employer_name</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">Company name — appears on the offer letter.</td></tr>
+            <tr><td class="pname">employer_email</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">Real HR/finance contact — this is who gets payment-cycle and due-payment reminder emails.</td></tr>
+            <tr><td class="pname">role_title</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">e.g. "Backend Engineer".</td></tr>
+            <tr><td class="pname">kpis</td><td class="ptype">string[]</td><td class="preq y">yes</td><td class="pdesc">At least one non-empty KPI string.</td></tr>
+            <tr><td class="pname">interview_link</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">Calendly/Zoom/Meet — whatever the enterprise uses.</td></tr>
+            <tr><td class="pname">employer_country</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Drives which tax form applies (e.g. <code style="font-family:var(--mono)">US</code> → W-8BEN).</td></tr>
+            <tr><td class="pname">employer_currency</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Defaults to <code style="font-family:var(--mono)">USD</code>. Use <code style="font-family:var(--mono)">NGN</code> for the domestic rail.</td></tr>
+            <tr><td class="pname">coverage_plan</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Defaults to <code style="font-family:var(--mono)">remote_contractor_basic</code>. See <a href="#plans" style="color:var(--teal);">Insurance Plans</a>.</td></tr>
+            <tr><td class="pname">coverage_months</td><td class="ptype">number</td><td class="preq n">no</td><td class="pdesc">Defaults to 1 — how often the coverage cycle renews.</td></tr>
+            <tr><td class="pname">proposed_amount</td><td class="ptype">number</td><td class="preq n">no</td><td class="pdesc">Monthly salary in <code style="font-family:var(--mono)">employer_currency</code>.</td></tr>
+            <tr><td class="pname">proposed_time / message</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Shown in the invite email as-is.</td></tr>
+          </table>
+          <div class="code-grid">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">Request</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>curl -X POST "$BASE_URL/v1/engagements/create" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "talent_id": "tal_0x91af",
+    "employer_name": "Acme Inc",
+    "employer_email": "hr@acme.com",
+    "role_title": "Backend Engineer",
+    "employer_country": "US",
+    "employer_currency": "USD",
+    "proposed_amount": 4200,
+    "interview_link": "https://cal.com/acme/interview",
+    "kpis": ["Ship the v1 API redesign"]
+  }'</pre></div>
+            <div class="code-block"><div class="cb-head"><span class="cb-label">201 Response</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{
+  <span class="tok-key">"engagement_id"</span>: <span class="tok-str">"eng_4a1c9b02"</span>,
+  <span class="tok-key">"status"</span>: <span class="tok-str">"interview_invited"</span>,
+  <span class="tok-key">"talent_name"</span>: <span class="tok-str">"Chinedu O."</span>,
+  <span class="tok-key">"employer_name"</span>: <span class="tok-str">"Acme Inc"</span>,
+  <span class="tok-key">"accept_url"</span>: <span class="tok-str">"https://.../v1/engagements/eng_4a1c9b02/accept?token=..."</span>
+  <span class="tok-c">// ...plus every field submitted above</span>
+}</pre></div>
+          </div>
+          <div class="note warn">
+            <div class="dot">!</div>
+            <div>Returns <b>422 talent_missing_email</b> if the talent record has no email on file — engaging requires somewhere to send the invite.</div>
+          </div>
+        </div>
+
+        <div class="endpoint" id="list-engagements">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/engagements</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Lists every engagement created by your key. Returns <code style="font-family:var(--mono);">{ count, results }</code>.</div>
+        </div>
+
+        <div class="endpoint" id="engagement-accept">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/engagements/:id/accept</span><span class="auth-pill public">public — no key</span></div>
+          <div class="endpoint-desc">Talent-facing confirmation link, validated by a <code style="font-family:var(--mono);">?token=</code> query param rather than a bearer key. Flips the engagement to <code style="font-family:var(--mono);">interview_accepted</code>. Returns an HTML confirmation page, not JSON.</div>
+        </div>
+
+        <div class="endpoint" id="send-contract">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/engagements/:id/contract</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Sends contract terms after the interview. Generates a real offer letter PDF (role, remuneration, KPIs, benefits) via <code style="font-family:var(--mono);">pdfkit</code> and emails it to the talent along with an accept link. No body required — terms come from the engagement itself.</div>
+          <div class="code-grid">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">Request</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>curl -X POST "$BASE_URL/v1/engagements/eng_4a1c9b02/contract" \
+  -H "Authorization: Bearer $API_KEY"</pre></div>
+            <div class="code-block"><div class="cb-head"><span class="cb-label">201 Response</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{
+  <span class="tok-key">"contract_id"</span>: <span class="tok-str">"ctr_7f02ab13"</span>,
+  <span class="tok-key">"status"</span>: <span class="tok-str">"pending_talent_signature"</span>,
+  <span class="tok-key">"tax_form"</span>: <span class="tok-str">"W-8BEN"</span>,
+  <span class="tok-key">"coverage_status"</span>: <span class="tok-str">"not_yet_purchased"</span>,
+  <span class="tok-key">"accept_url"</span>: <span class="tok-str">"https://.../v1/contracts/ctr_7f02ab13/accept?token=..."</span>,
+  <span class="tok-key">"offer_letter_attached"</span>: <span class="tok-bool">true</span>
+}</pre></div>
+          </div>
+          <div class="note warn">
+            <div class="dot">!</div>
+            <div><b>409 contract_already_sent</b> if a contract for this engagement was already generated — this route is not idempotent-retry-safe by design; a second call would issue a second offer letter.</div>
+          </div>
+        </div>
+
+        <div class="endpoint" id="contract-accept">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/contracts/:id/accept</span><span class="auth-pill public">public — no key</span></div>
+          <div class="endpoint-desc">The other talent-facing link, token-validated. If required KYC fields are still missing (bank account, BVN/NIN, phone, depending on rail), this renders an HTML form instead of finalizing — the matching <span class="path" style="font-size:12.5px;">POST /v1/contracts/:id/accept</span> handles that form's submission. Once nothing's missing, this is what actually flips the contract to <code style="font-family:var(--mono);">active</code>, purchases coverage, issues the talent's salary account, and opens pay period #1.</div>
+        </div>
+      </section>
+
+      <!-- ============ CONTRACTS ============ -->
+      <section class="doc-section" id="contracts">
+        <h2>Contracts</h2>
+        <p class="section-sub">Once a contract is active, these are the read/manage routes you'll use day to day.</p>
+
+        <div class="endpoint" id="list-contracts">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/contracts</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Lists every contract scoped to your key. Each active contract with unreimbursed insurance is enriched with a live FX estimate of that premium.</div>
+          <div class="code-grid" style="grid-template-columns:1fr;">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">200 Response (excerpt)</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{
+  <span class="tok-key">"count"</span>: <span class="tok-num">1</span>,
+  <span class="tok-key">"results"</span>: [{
+    <span class="tok-key">"contract_id"</span>: <span class="tok-str">"ctr_7f02ab13"</span>,
+    <span class="tok-key">"status"</span>: <span class="tok-str">"active"</span>,
+    <span class="tok-key">"employer_currency"</span>: <span class="tok-str">"USD"</span>,
+    <span class="tok-key">"coverage_status"</span>: <span class="tok-str">"active"</span>,
+    <span class="tok-key">"insurance_due_next_payment"</span>: <span class="tok-bool">true</span>,
+    <span class="tok-key">"insurance_estimate_employer_currency"</span>: <span class="tok-num">14.2</span>,
+    <span class="tok-key">"insurance_estimate_fx_source"</span>: <span class="tok-str">"live:open.er-api.com"</span>
+  }]
+}</pre></div>
+          </div>
+        </div>
+
+        <div class="endpoint" id="get-contract">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/contracts/:id</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">The full contract object — coverage status, salary/NUBAN details, tax form, KYC status, everything. The single source of truth for "what does this contract currently look like."</div>
+        </div>
+
+        <div class="endpoint" id="pay-periods">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/contracts/:id/pay-periods</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">The recurring salary schedule for this contract. Status (<code style="font-family:var(--mono);">due</code> / <code style="font-family:var(--mono);">overdue</code> / <code style="font-family:var(--mono);">paid</code>) is computed live on every read from the due date, not stored — no scheduler needed to keep it accurate.</div>
+        </div>
+
+        <div class="endpoint" id="amount-due">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/contracts/:id/amount-due</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">The exact total to wire this cycle — <b>NGN-flow contracts only</b> (400 <code style="font-family:var(--mono);">ngn_flow_only</code> otherwise). Uses the identical calculation the real settlement uses internally, so the number shown here and the number actually charged can never drift apart.</div>
+          <div class="code-grid" style="grid-template-columns:1fr;">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">200 Response</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{
+  <span class="tok-key">"contract_id"</span>: <span class="tok-str">"ctr_9c21ff44"</span>,
+  <span class="tok-key">"salary_naira"</span>: <span class="tok-num">450000</span>,
+  <span class="tok-key">"service_fee_naira"</span>: <span class="tok-num">22500</span>,
+  <span class="tok-key">"platform_fee_naira"</span>: <span class="tok-num">22500</span>,
+  <span class="tok-key">"hub_markup_naira"</span>: <span class="tok-num">0</span>,
+  <span class="tok-key">"insurance_due_this_cycle"</span>: <span class="tok-bool">true</span>,
+  <span class="tok-key">"insurance_naira"</span>: <span class="tok-num">8500</span>,
+  <span class="tok-key">"insurance_is_live_quote"</span>: <span class="tok-bool">true</span>,
+  <span class="tok-key">"total_naira"</span>: <span class="tok-num">481000</span>,
+  <span class="tok-key">"pay_to_account_number"</span>: <span class="tok-str">"9012345678"</span>,
+  <span class="tok-key">"pay_to_bank_name"</span>: <span class="tok-str">"Rubies MFB"</span>,
+  <span class="tok-key">"last_payment"</span>: <span class="tok-bool">null</span>,
+  <span class="tok-key">"next_payment_due_date"</span>: <span class="tok-str">"2026-09-29T00:00:00.000Z"</span>
+}</pre></div>
+          </div>
+          <div class="note info">
+            <div class="dot">i</div>
+            <div><code style="font-family:var(--mono);">service_fee_naira</code> is <code style="font-family:var(--mono);">platform_fee_naira + hub_markup_naira</code> combined deliberately — an enterprise only needs one honest total, not a breakdown that reads like two different parties are each taking a cut. Hubs can see their own markup broken out via <a href="#hub-account" style="color:var(--orange);">GET /v1/hub/account</a> and <a href="#hub-stats" style="color:var(--orange);">GET /v1/hub/stats</a>.</div>
+          </div>
+        </div>
+
+        <div class="endpoint" id="simulate-deposit">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/contracts/:id/simulate-deposit</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">NGN-flow contracts only, and only meaningful in test mode. Simulates the employer's own wire landing on the talent's real intermediate NGN balance via Felicity's <code style="font-family:var(--mono);">simulate_funding</code> action — which fires a real webhook back to this server asynchronously and triggers the actual settlement pipeline (insurance, fee/markup split, salary send). The response returns before that settlement has happened.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">amount_naira</td><td class="ptype">number</td><td class="preq n">no</td><td class="pdesc">Defaults to the contract's own <code style="font-family:var(--mono)">proposed_amount</code>.</td></tr>
+          </table>
+        </div>
+
+        <div class="endpoint" id="release-contract">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/contracts/:id/release</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Ends the relationship — works whether the contract was accepted or is still pending signature. Any unpaid pay periods are voided, the talent's status flips back to <code style="font-family:var(--mono);">available</code> so they reappear in discovery, and the contract becomes terminal. Money already paid stays paid; this only affects what's still ahead.</div>
+        </div>
+
+        <div class="endpoint" id="w8ben">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/contracts/:id/w8ben</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Downloads the real, signed IRS Form W-8BEN PDF directly from Dropbox Sign — US-employer contracts only, and only once <code style="font-family:var(--mono);">w8ben_status</code> is <code style="font-family:var(--mono);">signed</code>. Nothing is cached locally; every call fetches the current signed document live.</div>
+        </div>
+      </section>
+
+      <!-- ============ PAYROLL ============ -->
+      <section class="doc-section" id="payroll">
+        <h2>Payroll &amp; Ledger</h2>
+        <p class="section-sub">Employer pays in their own currency, talent receives NGN — conversion happens against a live rate at disbursement time.</p>
+
+        <div class="endpoint" id="disburse">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/payroll/disburse</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Runs payroll for one or more contracts in a single call. Amounts are always derived from each contract's own <code style="font-family:var(--mono);">proposed_amount</code> — never accepted from the request — so what's disbursed always matches what the talent was actually promised.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">contract_ids</td><td class="ptype">string[]</td><td class="preq y">yes*</td><td class="pdesc">Contracts to run payroll against. *<code style="font-family:var(--mono)">contract_id</code> (singular string) also accepted for back-compat with the older single-contract shape.</td></tr>
+            <tr><td class="pname">idempotency_key</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Applied per-contract as <code style="font-family:var(--mono)">key:contract_id</code>. Replaying the same key returns the original payout instead of paying twice — always derive this from something stable on your side (e.g. <code style="font-family:var(--mono)">payroll_run_id + contract_id</code>), never a random value.</td></tr>
+          </table>
+          <div class="code-grid">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">Request</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>curl -X POST "$BASE_URL/v1/payroll/disburse" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contract_ids": ["ctr_7f02ab13"],
+    "idempotency_key": "payroll-2026-09-run"
+  }'</pre></div>
+            <div class="code-block"><div class="cb-head"><span class="cb-label">202 Response</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{
+  <span class="tok-key">"count"</span>: <span class="tok-num">1</span>, <span class="tok-key">"succeeded"</span>: <span class="tok-num">1</span>, <span class="tok-key">"failed"</span>: <span class="tok-num">0</span>,
+  <span class="tok-key">"totals"</span>: { <span class="tok-key">"total_gross"</span>: <span class="tok-num">4200</span>, <span class="tok-key">"total_platform_fee"</span>: <span class="tok-num">210</span>, <span class="tok-key">"total_employer_charged"</span>: <span class="tok-num">4410</span> },
+  <span class="tok-key">"results"</span>: [{
+    <span class="tok-key">"payout_id"</span>: <span class="tok-str">"pay_c81f0e22"</span>,
+    <span class="tok-key">"fx_rate"</span>: <span class="tok-num">1580.42</span>,
+    <span class="tok-key">"fx_source"</span>: <span class="tok-str">"live:open.er-api.com"</span>,
+    <span class="tok-key">"net_amount_ngn"</span>: <span class="tok-num">6637764</span>,
+    <span class="tok-key">"employer_total_charged"</span>: <span class="tok-num">4410</span>,
+    <span class="tok-key">"status"</span>: <span class="tok-str">"settled"</span>
+  }]
+}</pre></div>
+          </div>
+          <div class="note warn">
+            <div class="dot">!</div>
+            <div><b>This is the USD/GBP/EUR/CAD rail</b>, and it will reject an NGN-flow contract outright with <code style="font-family:var(--mono);">wrong_rail_for_ngn</code> — NGN contracts settle automatically via Felicity's webhook (see <a href="#simulate-deposit" style="color:var(--orange);">simulate-deposit</a>), never through this endpoint. Currently, this endpoint's fund movement is simulated within the API for demo/testing purposes — it doesn't yet call a live Fincra/Rubies transfer for non-NGN currencies. <code style="font-family:var(--mono);">fx_rate</code> is real and live; the transfer itself is the part still ahead of a licensed money-movement integration for these currencies.</div>
+          </div>
+        </div>
+
+        <div class="endpoint" id="get-payout">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/payroll/:id</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Fetch a single payout by its <code style="font-family:var(--mono);">payout_id</code>.</div>
+        </div>
+
+        <div class="endpoint" id="ledger">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/ledger</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Aggregate payout history, scoped to your key — running volume by currency, total platform revenue, and the full payout list (newest first).</div>
+        </div>
+
+        <div class="endpoint" id="rates">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/rates</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">The same live FX rate payroll disbursement actually uses, exposed so you can compute an honest estimate instead of guessing.</div>
+          <div class="subhead">Query parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">currency</td><td class="ptype">string</td><td class="preq n">no</td><td class="pdesc">Defaults to <code style="font-family:var(--mono)">USD</code>.</td></tr>
+          </table>
+          <div class="code-grid" style="grid-template-columns:1fr;">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">200 Response</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{ <span class="tok-key">"currency"</span>: <span class="tok-str">"USD"</span>, <span class="tok-key">"rate"</span>: <span class="tok-num">1580.42</span>, <span class="tok-key">"source"</span>: <span class="tok-str">"live:open.er-api.com"</span> }</pre></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ PLANS ============ -->
+      <section class="doc-section" id="plans">
+        <h2>Insurance Plans</h2>
+        <p class="section-sub">Health coverage is tied directly to the contract, priced against the live catalog.</p>
+
+        <div class="endpoint" id="plans-list">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/plans</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">Lists the three coverage plans (basic / plus / family) with their catalog base premium and benefits, live from the insurance provider. Returns <code style="font-family:var(--mono);">422 not_configured</code> if the NGN insurance rail isn't set up server-side yet.</div>
+        </div>
+
+        <div class="endpoint" id="plans-quote">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/plans/quote</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">The real premium for a specific plan + duration, quoted live — not the catalog's static base price.</div>
+          <div class="subhead">Query parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">plan</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">e.g. <code style="font-family:var(--mono)">remote_contractor_basic</code>.</td></tr>
+            <tr><td class="pname">months</td><td class="ptype">number</td><td class="preq n">no</td><td class="pdesc">Defaults to 12.</td></tr>
+          </table>
+        </div>
+      </section>
+
+      <!-- ============ HUB ============ -->
+      <section class="doc-section" id="hub">
+        <h2>Hub Self-Service</h2>
+        <p class="section-sub">Everything a hub needs to run its own white-labeled pipeline — markup rate, settlement account, notification email, roster, and stats. All routes below return <code style="font-family:var(--mono);">403 hub_only</code> for enterprise keys, and every write is silently forced into the caller's own <code style="font-family:var(--mono);">hub_scope</code> — a hub can never touch another hub's data no matter what a request body says.</p>
+
+        <div class="endpoint" id="hub-account">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/hub/account</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Current settings: markup rate, admin-set cap, settlement account, notification email, scope.</div>
+        </div>
+
+        <div class="endpoint" id="hub-markup">
+          <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/v1/hub/markup</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Sets the hub's own white-label markup rate — always clamped server-side to the admin-set ceiling, even if a higher value is sent.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">markup_bps</td><td class="ptype">number</td><td class="preq y">yes</td><td class="pdesc">Basis points, e.g. <code style="font-family:var(--mono)">350</code> = 3.5%. <code style="font-family:var(--mono)">400 exceeds_cap</code> if above your ceiling.</td></tr>
+          </table>
+        </div>
+
+        <div class="endpoint" id="hub-settlement">
+          <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/v1/hub/settlement-account</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Where this hub's markup gets paid on every settlement.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">account_number</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">—</td></tr>
+            <tr><td class="pname">account_name</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">—</td></tr>
+            <tr><td class="pname">bank_code</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">CBN bank code.</td></tr>
+          </table>
+        </div>
+
+        <div class="endpoint" id="hub-notification">
+          <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/v1/hub/notification-email</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Where "your talent was just paid, here's your markup" notifications get sent. Without this set, a hub simply never gets notified — silently.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">email</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">—</td></tr>
+          </table>
+        </div>
+
+        <div class="endpoint" id="hub-stats">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/hub/stats</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Real activity numbers for this hub's pipeline only — talent count, active/total contracts, distinct enterprises engaged, payments settled, and total salary + markup paid out. Totals come from a real per-settlement ledger, not a snapshot, so a talent paid multiple times is counted correctly.</div>
+        </div>
+
+        <div class="endpoint" id="hub-roster">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/talents/roster</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">A hub's own full roster — every status, not just <code style="font-family:var(--mono);">available</code>. Distinct from <a href="#discover-talents" style="color:var(--orange);">/discover</a>, which is the enterprise-facing "who can I hire right now" view; this is the hub-facing "everyone I've ever uploaded" view.</div>
+        </div>
+
+        <div class="endpoint" id="hub-upload">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/talents/upload</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Bulk create/update, deduped by email within your own pipeline. Each item is processed and reported independently — one bad row in a 40-talent sync doesn't fail the other 39.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">talents</td><td class="ptype">object[]</td><td class="preq y">yes</td><td class="pdesc">Each item: <code style="font-family:var(--mono)">{ name, email, country }</code> required, plus optional <code style="font-family:var(--mono)">stack</code> (string[]) and <code style="font-family:var(--mono)">vetted_score</code> (number, defaults 75).</td></tr>
+          </table>
+          <div class="code-grid" style="grid-template-columns:1fr;">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">200 Response</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{ <span class="tok-key">"count"</span>: <span class="tok-num">2</span>, <span class="tok-key">"created"</span>: <span class="tok-num">1</span>, <span class="tok-key">"updated"</span>: <span class="tok-num">1</span>, <span class="tok-key">"failed"</span>: <span class="tok-num">0</span>, <span class="tok-key">"results"</span>: [ <span class="tok-c">/* one entry per input item, each with action: "created"|"updated" or an error */</span> ] }</pre></div>
+          </div>
+          <div class="note warn">
+            <div class="dot">!</div>
+            <div>An email that already exists under a <b>different</b> hub's pipeline is rejected as <code style="font-family:var(--mono);">email_conflict</code> for that item — nothing gets silently overwritten across pipelines.</div>
+          </div>
+        </div>
+
+        <div class="endpoint" id="hub-patch-talent">
+          <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/v1/talents/:id</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Edit one talent in your own roster. <code style="font-family:var(--mono);">name</code>, <code style="font-family:var(--mono);">stack</code>, <code style="font-family:var(--mono);">country</code>, <code style="font-family:var(--mono);">vetted_score</code> are editable; <code style="font-family:var(--mono);">pipeline</code> and <code style="font-family:var(--mono);">status</code> are not.</div>
+        </div>
+
+        <div class="endpoint" id="hub-delete-talent">
+          <div class="endpoint-head"><span class="method delete">DELETE</span><span class="path">/v1/talents/:id</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Remove a talent from your roster. Blocked with <code style="font-family:var(--mono);">409 contract_in_progress</code> if they have a pending or active contract — the enterprise needs to release it first.</div>
+        </div>
+      </section>
+
+      <!-- ============ SYSTEM ============ -->
+      <section class="doc-section" id="health">
+        <h2>System</h2>
+        <div class="endpoint" id="health-check">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/health</span><span class="auth-pill public">public — no key</span></div>
+          <div class="endpoint-desc">Liveness check. Also reports whether persistence (Redis-backed state across restarts) is currently enabled.</div>
+          <div class="code-grid" style="grid-template-columns:1fr;">
+            <div class="code-block"><div class="cb-head"><span class="cb-label">200 Response</span><button class="cb-copy" onclick="copyBlock(this)">Copy</button></div><pre>{ <span class="tok-key">"ok"</span>: <span class="tok-bool">true</span>, <span class="tok-key">"service"</span>: <span class="tok-str">"fetchtalos-api"</span>, <span class="tok-key">"time"</span>: <span class="tok-str">"2026-08-30T12:00:00.000Z"</span>, <span class="tok-key">"persistence"</span>: <span class="tok-str">"enabled"</span> }</pre></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap footer-inner">
+    <div>© 2026 FetchTalos — The Talent Infrastructure for Africa</div>
+    <div style="display:flex;gap:20px;">
+      <a href="/">Home</a>
+      <a href="/hub">Hub login</a>
+      <a href="/#cta">Request access</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  function copyText(elId, btn){
+    const text = document.getElementById(elId).textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent; btn.textContent = 'Copied';
+      setTimeout(() => btn.textContent = orig, 1200);
+    });
+  }
+  function copyBlock(btn){
+    const pre = btn.closest('.code-block').querySelector('pre');
+    navigator.clipboard.writeText(pre.textContent).then(() => {
+      const orig = btn.textContent; btn.textContent = 'Copied';
+      setTimeout(() => btn.textContent = orig, 1200);
+    });
+  }
+
+  // Active TOC highlighting on scroll
+  const sections = [...document.querySelectorAll('.endpoint[id], .doc-section[id]')];
+  const tocLinks = [...document.querySelectorAll('.toc a')];
+  const byId = new Map(tocLinks.map(a => [a.getAttribute('href').slice(1), a]));
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const link = byId.get(entry.target.id);
+      if (!link) return;
+      if (entry.isIntersecting) {
+        tocLinks.forEach(a => a.classList.remove('active'));
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>
