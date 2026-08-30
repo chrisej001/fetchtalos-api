@@ -2533,13 +2533,18 @@ app.post('/v1/engagements/create', async (req, res) => {
 app.get('/v1/engagements/:id/accept', async (req, res) => {
   const engagement = db.engagements.get(req.params.id);
   if (!engagement || engagement.accept_token !== req.query.token) {
-    return res.status(404).send('<h2>Invalid or expired link.</h2>');
+    return res.status(404).send(invalidLinkPage());
   }
   if (engagement.status === 'interview_invited') {
     engagement.status = 'interview_accepted';
     await saveState();
   }
-  res.send(`<h2>Interview confirmed</h2><p>Thanks ${engagement.talent_name} — you're confirmed. See you there.</p>`);
+  res.send(talentPage({
+    title: 'Interview confirmed — FetchTalos',
+    icon: 'ok',
+    headline: 'Interview confirmed',
+    bodyHtml: `Thanks, <b>${engagement.talent_name}</b> — you're confirmed for the <b>${engagement.role_title || 'role'}</b> interview with <b>${engagement.employer_name}</b>. See you there.`,
+  }));
 });
 
 // POST /v1/engagements/:id/contract — enterprise clicks "Contract" after the interview
@@ -2611,6 +2616,95 @@ app.post('/v1/engagements/:id/contract', async (req, res) => {
   res.status(201).json({ ...contract, accept_url: acceptUrl, offer_letter_attached: Boolean(attachments) });
 });
 
+/* ---------------------------------------------------------------------- *
+ * TALENT-FACING PAGE SHELL — every page a talent themselves ever sees
+ * (interview confirmation, the KYC form, contract acceptance, the
+ * invalid-link fallback) shares this wrapper so the brand is consistent
+ * with the landing page / docs / admin / hub dashboard, even though these
+ * are plain server-rendered strings rather than their own static files.
+ * Same fonts/palette as everywhere else; tone is warmer and less
+ * dev-tool-dense than the dashboards, since the audience here is a human
+ * being confirming an interview or a job offer, not an engineer.
+ * ---------------------------------------------------------------------- */
+const TALENT_PAGE_ICONS = {
+  ok: `<div class="icon ok"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="#2fe6c6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`,
+  form: `<div class="icon warn"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M7 3.5h7l4 4v13a1 1 0 01-1 1H7a1 1 0 01-1-1v-16a1 1 0 011-1z" stroke="#ff8a4c" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.5 12.5h5M9.5 16h5" stroke="#ff8a4c" stroke-width="1.8" stroke-linecap="round"/></svg></div>`,
+  muted: `<div class="icon muted"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M13.5 10.5l-6 6M8.7 6.6a3.8 3.8 0 015.4 0l.2.2a3.8 3.8 0 010 5.4l-2 2M15.3 17.4a3.8 3.8 0 01-5.4 0l-.2-.2a3.8 3.8 0 010-5.4l2-2" stroke="#97a1b0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`,
+};
+
+function talentPage({ title, icon = 'ok', headline, bodyHtml, formHtml = '', wide = false }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#090b10; --bg-elevated:#12151c; --bg-elevated-2:#171b24;
+    --line:#232834; --line-soft:#1b1f29;
+    --teal:#2fe6c6; --orange:#ff8a4c;
+    --text:#f2f5f7; --text-muted:#97a1b0; --text-faint:#5b6472;
+    --display:'Bricolage Grotesque',sans-serif; --body:'IBM Plex Sans',sans-serif; --mono:'JetBrains Mono',monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg); color:var(--text); font-family:var(--body); line-height:1.6; -webkit-font-smoothing:antialiased; min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:56px 20px 40px;}
+  .brand{display:flex;align-items:center;gap:9px;font-family:var(--display);font-weight:700;font-size:16px;margin-bottom:36px;color:var(--text);}
+  .brand svg{width:24px;height:24px;flex-shrink:0;}
+  .card{background:var(--bg-elevated); border:1px solid var(--line); border-radius:18px; padding:44px 40px; max-width:${wide ? '580' : '480'}px; width:100%; text-align:${wide ? 'left' : 'center'}; box-shadow:0 24px 60px rgba(0,0,0,.35);}
+  @media(max-width:560px){ .card{ padding:32px 24px; } }
+  .icon{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:${wide ? '0 0 20px' : '0 auto 22px'};}
+  .icon.ok{background:rgba(47,230,198,.12);}
+  .icon.warn{background:rgba(255,138,76,.12);}
+  .icon.muted{background:var(--bg-elevated-2);}
+  h1{font-family:var(--display);font-weight:700;font-size:25px;line-height:1.25;margin-bottom:12px;letter-spacing:-.01em;}
+  .body-copy{color:var(--text-muted);font-size:14.5px;line-height:1.7;}
+  .body-copy b{color:var(--text);}
+  .body-copy + .body-copy{margin-top:10px;}
+  .foot{margin-top:32px;font-family:var(--mono);font-size:11.5px;color:var(--text-faint);}
+  .divider{height:1px;background:var(--line-soft);margin:26px 0;}
+  form{text-align:left;}
+  .field-label{display:block;font-size:12px;color:var(--text-muted);margin:16px 0 6px;font-family:var(--mono);letter-spacing:.02em;}
+  input,select,textarea{width:100%;background:var(--bg-elevated-2);border:1px solid var(--line);color:var(--text);padding:11px 13px;border-radius:8px;font-size:14px;font-family:var(--body);}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--teal);}
+  textarea{resize:vertical;min-height:64px;}
+  .btn-submit{width:100%;margin-top:26px;background:var(--text);color:var(--bg);border:none;padding:14px;border-radius:9px;font-family:var(--mono);font-weight:500;font-size:14px;cursor:pointer;transition:all .18s ease;}
+  .btn-submit:hover{background:var(--teal);}
+  .info-box{background:var(--bg-elevated-2); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-top:10px; font-size:13.5px; color:var(--text-muted); line-height:1.6;}
+  .info-box .k{color:var(--text-faint); font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.04em; display:block; margin-bottom:4px;}
+  .info-box .v{color:var(--text); font-family:var(--mono); font-size:13.5px;}
+  .warn-box{background:rgba(255,138,76,.07); border:1px solid rgba(255,138,76,.25); border-radius:10px; padding:14px 16px; margin-top:10px; font-size:13.5px; color:var(--text-muted); line-height:1.6;}
+  .warn-box b{color:var(--orange);}
+</style>
+</head>
+<body>
+  <div class="brand">
+    <svg viewBox="0 0 26 26" fill="none"><circle cx="6" cy="13" r="5" stroke="#2fe6c6" stroke-width="2"/><circle cx="6" cy="13" r="1.5" fill="#2fe6c6"/><line x1="11" y1="13" x2="15" y2="13" stroke="#3a4150" stroke-width="2"/><circle cx="20" cy="13" r="5" stroke="#ff8a4c" stroke-width="2"/><circle cx="20" cy="13" r="1.5" fill="#ff8a4c"/></svg>
+    FetchTalos
+  </div>
+  <div class="card">
+    ${TALENT_PAGE_ICONS[icon] || ''}
+    <h1>${headline}</h1>
+    <div class="body-copy">${bodyHtml}</div>
+    ${formHtml}
+  </div>
+  <div class="foot">Powered by FetchTalos</div>
+</body>
+</html>`;
+}
+
+function invalidLinkPage() {
+  return talentPage({
+    title: 'Link not valid — FetchTalos',
+    icon: 'muted',
+    headline: "This link isn't valid",
+    bodyHtml: `It may have expired, already been used, or been copied incorrectly. If you're not sure what to do next, reach out to whoever sent it to you.`,
+  });
+}
+
 // GET /v1/contracts/:id/accept — TALENT-facing, public, no API key. THIS is
 // the only place a talent's status is allowed to flip to "engaged".
 // Major Nigerian banks whose CBN codes are long-established and stable —
@@ -2645,16 +2739,16 @@ function renderKycForm(contract, missingFields, token) {
       // "Male" or "Female", no default, no way to infer it. Free text
       // risks a typo or case mismatch producing the exact same validation
       // failure this field was added to fix.
-      return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
-        <select name="${f}" required style="padding:8px;width:336px;max-width:90vw;font-size:14px;">
+      return `<label class="field-label">${label}</label>
+        <select name="${f}" required>
           <option value="">Select…</option>
           <option value="Male">Male</option>
           <option value="Female">Female</option>
         </select>`;
     }
     if (f === 'address') {
-      return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
-        <textarea name="${f}" required placeholder="${placeholder}" style="padding:8px;width:320px;max-width:90vw;font-size:14px;height:60px;"></textarea>`;
+      return `<label class="field-label">${label}</label>
+        <textarea name="${f}" required placeholder="${placeholder}"></textarea>`;
     }
     if (f === 'rubies_bank_code') {
       // Most people know their bank's NAME, not its CBN code — asking for
@@ -2663,30 +2757,33 @@ function renderKycForm(contract, missingFields, token) {
       // whose bank isn't in the list can still enter a code manually via
       // the "Other" option, which reveals a plain text fallback input.
       const options = NIGERIA_BANKS.map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
-      return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">Your bank</label>
-        <select id="bankSelect" onchange="document.getElementById('bankCodeManual').style.display = this.value === 'other' ? 'block' : 'none'; document.getElementById('bankCodeManual').required = this.value === 'other'; document.getElementById('bankCodeHidden').value = this.value === 'other' ? '' : this.value;" style="padding:8px;width:336px;max-width:90vw;font-size:14px;">
+      return `<label class="field-label">Your bank</label>
+        <select id="bankSelect" onchange="document.getElementById('bankCodeManual').style.display = this.value === 'other' ? 'block' : 'none'; document.getElementById('bankCodeManual').required = this.value === 'other'; document.getElementById('bankCodeHidden').value = this.value === 'other' ? '' : this.value;">
           <option value="">Select your bank…</option>
           ${options}
           <option value="other">Other (not listed — I'll enter the code)</option>
         </select>
         <input type="hidden" name="${f}" id="bankCodeHidden">
-        <input id="bankCodeManual" type="text" placeholder="Your bank's CBN code — ask your bank if unsure" style="display:none;margin-top:8px;padding:8px;width:320px;max-width:90vw;font-size:14px;" oninput="document.getElementById('bankCodeHidden').value = this.value;">`;
+        <input id="bankCodeManual" type="text" placeholder="Your bank's CBN code — ask your bank if unsure" style="display:none;margin-top:8px;" oninput="document.getElementById('bankCodeHidden').value = this.value;">`;
     }
     const type = f === 'date_of_birth' || f === 'customer_dob' ? 'date' : 'text';
-    return `<label style="display:block;margin:14px 0 4px;font-family:sans-serif;">${label}</label>
-      <input name="${f}" type="${type}" ${placeholder ? `placeholder="${placeholder}"` : ''} required style="padding:8px;width:320px;max-width:90vw;font-size:14px;">`;
+    return `<label class="field-label">${label}</label>
+      <input name="${f}" type="${type}" ${placeholder ? `placeholder="${placeholder}"` : ''} required>`;
   }).join('');
 
-  return `
-    <div style="font-family:serif;max-width:520px;margin:40px auto;padding:0 20px;">
-      <h2>Almost there, ${contract.talent_name}</h2>
-      <p style="font-family:sans-serif;">Before your health coverage can be activated, we need a couple more details — this stays with your coverage provider, not with the employer.</p>
+  return talentPage({
+    title: 'A few more details — FetchTalos',
+    icon: 'form',
+    wide: true,
+    headline: `Almost there, ${contract.talent_name}`,
+    bodyHtml: `Before your health coverage can be activated, we need a couple more details — this stays with your coverage provider, not with the employer.`,
+    formHtml: `
       <form method="POST" action="/v1/contracts/${contract.contract_id}/accept">
         <input type="hidden" name="token" value="${token}">
         ${rows}
-        <button type="submit" style="margin-top:20px;padding:10px 22px;font-size:14px;">Submit and activate coverage</button>
-      </form>
-    </div>`;
+        <button type="submit" class="btn-submit">Submit and activate coverage</button>
+      </form>`,
+  });
 }
 
 async function finalizeContractAcceptance(contract) {
@@ -2780,20 +2877,25 @@ async function sendWelcomeEmail(contract, talent) {
 }
 
 function acceptedConfirmationHtml(contract) {
-  const coverageLine = contract.coverage_status === 'active'
-    ? `Your health coverage is active — policy ${contract.coverage_policy_id || ''}.`
+  const coverageBox = contract.coverage_status === 'active'
+    ? `<div class="info-box"><span class="k">Health coverage</span><span class="v">Active — policy ${contract.coverage_policy_id || ''}</span></div>`
     : contract.coverage_status === 'not_yet_purchased' ? ''
-    : `Coverage status: ${contract.coverage_status}.`;
+    : `<div class="warn-box"><b>Coverage status:</b> ${contract.coverage_status}</div>`;
 
-  const salaryLine = contract.salary_status === 'va_issued'
-    ? `Salary account ready — wire instructions: ${contract.salary_va_account_number || ''} (${contract.salary_va_bank_name || ''}, routing ${contract.salary_va_routing_number || ''}).`
+  const salaryBox = contract.salary_status === 'va_issued'
+    ? `<div class="info-box"><span class="k">Salary account</span><span class="v">${contract.salary_va_account_number || ''} — ${contract.salary_va_bank_name || ''}, routing ${contract.salary_va_routing_number || ''}</span></div>`
     : contract.salary_status === 'not_yet_purchased' || !contract.salary_status ? ''
-    : `<span style="color:#b91c1c;">Salary account status: ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}. This needs attention before payroll can run for real.</span>`;
+    : `<div class="warn-box"><b>Salary account status:</b> ${contract.salary_status}${contract.salary_note ? ' — ' + contract.salary_note : ''}. This needs attention before payroll can run for real.</div>`;
 
   // Same reasoning as the welcome email above — no NGN pass-through
   // account shown to the talent here either.
 
-  return `<h2>Contract accepted</h2><p>Welcome aboard, ${contract.talent_name}. ${coverageLine}</p><p>${salaryLine}</p>`;
+  return talentPage({
+    title: 'Contract accepted — FetchTalos',
+    icon: 'ok',
+    headline: `You're all set, ${contract.talent_name}`,
+    bodyHtml: `Welcome aboard — your contract with <b>${contract.employer_name || 'your employer'}</b> is now active.${coverageBox}${salaryBox}`,
+  });
 }
 
 // GET — talent clicks the link from their contract email. If MyCover needs
@@ -2801,7 +2903,7 @@ function acceptedConfirmationHtml(contract) {
 app.get('/v1/contracts/:id/accept', async (req, res) => {
   const contract = db.contracts.get(req.params.id);
   if (!contract || contract.accept_token !== req.query.token) {
-    return res.status(404).send('<h2>Invalid or expired link.</h2>');
+    return res.status(404).send(invalidLinkPage());
   }
   if (contract.status !== 'pending_talent_signature') {
     return res.send(acceptedConfirmationHtml(contract)); // already accepted — idempotent, don't re-purchase
@@ -2842,7 +2944,7 @@ app.get('/v1/contracts/:id/accept', async (req, res) => {
 app.post('/v1/contracts/:id/accept', async (req, res) => {
   const contract = db.contracts.get(req.params.id);
   if (!contract || contract.accept_token !== req.body.token) {
-    return res.status(404).send('<h2>Invalid or expired link.</h2>');
+    return res.status(404).send(invalidLinkPage());
   }
   if (contract.status !== 'pending_talent_signature') {
     return res.send(acceptedConfirmationHtml(contract));
