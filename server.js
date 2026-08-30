@@ -16,6 +16,17 @@ app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } })); //
 app.use(express.urlencoded({ extended: true })); // needed for the talent-facing KYC form below (real HTML forms POST this way, not JSON)
 
 /* ---------------------------------------------------------------------- *
+ * STATIC PAGES — the landing page and its linked consoles, served directly
+ * off this same server/URL instead of requiring each HTML file to be
+ * opened locally. Landing page links to /admin (footer) and /hub (hub
+ * audience card) so both are reachable from a deployed URL, not just by
+ * double-clicking the file.
+ * ---------------------------------------------------------------------- */
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
+app.get('/hub', (req, res) => res.sendFile(path.join(__dirname, 'hub-dashboard.html')));
+
+/* ---------------------------------------------------------------------- *
  * AUTH — Stripe/Paystack-style bearer key. Two key TYPES now exist:
  *
  * - "enterprise" — sees the FULL shared talent pool (this is Tobi's type).
