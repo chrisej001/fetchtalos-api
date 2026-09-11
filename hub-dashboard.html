@@ -207,12 +207,14 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
 
     <div class="card">
       <h3 style="font-size:15px;">Where your markup gets paid</h3>
+      <p style="font-size:12.5px; color:var(--text-muted); margin:8px 0 14px;">Pick your bank from the live list, enter your account number, then verify it — we'll resolve the real account name from the bank itself before you save, so this can never be saved under the wrong name.</p>
       <div class="form-grid" style="margin-top:14px;">
-        <div class="field"><label>Account number</label><input id="settleAcct"></div>
-        <div class="field"><label>Account name</label><input id="settleName"></div>
-        <div class="field"><label>Bank code</label><input id="settleBank" placeholder="e.g. 058"></div>
+        <div class="field"><label>Bank</label><select id="settleBankSelect"><option value="">Loading banks…</option></select></div>
+        <div class="field"><label>Account number</label><input id="settleAcct" maxlength="10"></div>
       </div>
-      <button class="btn-primary" id="saveSettleBtn">Save settlement account</button>
+      <button class="row-btn" id="verifySettleBtn">Verify account</button>
+      <div id="settleVerifyResult" style="margin-top:10px;font-size:13px;"></div>
+      <button class="btn-primary" id="saveSettleBtn" style="margin-top:14px;" disabled>Save settlement account</button>
       <div id="settleResult" style="margin-top:10px;"></div>
     </div>
 
@@ -559,19 +561,56 @@ document.getElementById('bulkUploadBtn').onclick = async function(){
 };
 
 /* MARKUP & SETTLEMENT */
+let ngnBanksLoaded = false;
+let ngnBanksConfigured = false;
+let verifiedAccountName = null; // set only by a successful /resolve call (or a manual fallback when Felicity isn't configured), cleared whenever bank/account number changes
+let verifiedFor = null; // `${bank_code}:${account_number}` this verification was for — Save is blocked if the fields have since changed
+
+async function loadNgnBanks(){
+  if(ngnBanksLoaded) return;
+  ngnBanksLoaded = true;
+  const select = document.getElementById('settleBankSelect');
+  try{
+    const data = await api('/v1/reference/ngn-banks');
+    ngnBanksConfigured = data.configured;
+    if(!data.configured || !data.banks.length){
+      select.outerHTML = '<input id="settleBankSelect" placeholder="Bank code (e.g. 058) — live bank list not available here">';
+      document.getElementById('settleBankSelect').addEventListener('input', invalidateSettleVerification);
+      return;
+    }
+    select.innerHTML = '<option value="">Select your bank…</option>' + data.banks.map(b => `<option value="${b.code}">${b.name}</option>`).join('');
+    if(hubAccount?.hub_settlement_account?.bank_code) select.value = hubAccount.hub_settlement_account.bank_code;
+    select.addEventListener('change', invalidateSettleVerification);
+  }catch(err){
+    select.outerHTML = '<input id="settleBankSelect" placeholder="Bank code (e.g. 058) — live bank list failed to load">';
+    document.getElementById('settleBankSelect').addEventListener('input', invalidateSettleVerification);
+  }
+}
+
+function invalidateSettleVerification(){
+  verifiedAccountName = null; verifiedFor = null;
+  document.getElementById('saveSettleBtn').disabled = true;
+  document.getElementById('settleVerifyResult').innerHTML = '';
+}
+
 function loadMarkupPanel(){
   if(!hubAccount) return;
   document.getElementById('capDisplay').textContent = (hubAccount.hub_markup_cap_bps/100) + '%';
   document.getElementById('markupInput').value = hubAccount.hub_markup_bps/100;
+  loadNgnBanks();
   if(hubAccount.hub_settlement_account){
     document.getElementById('settleAcct').value = hubAccount.hub_settlement_account.account_number || '';
-    document.getElementById('settleName').value = hubAccount.hub_settlement_account.account_name || '';
-    document.getElementById('settleBank').value = hubAccount.hub_settlement_account.bank_code || '';
+    const acct = hubAccount.hub_settlement_account;
+    document.getElementById('settleVerifyResult').innerHTML = acct.account_name
+      ? `<span style="color:${acct.verified ? 'var(--teal)' : 'var(--red)'};">Currently saved: ${acct.account_name}${acct.verified ? ' ✓ verified' : ' — not verified'}</span>`
+      : '';
   }
   if(hubAccount.hub_notification_email){
     document.getElementById('notifyEmail').value = hubAccount.hub_notification_email;
   }
 }
+
+document.getElementById('settleAcct').addEventListener('input', invalidateSettleVerification);
 
 document.getElementById('saveMarkupBtn').onclick = async function(){
   const pct = parseFloat(document.getElementById('markupInput').value);
@@ -584,13 +623,40 @@ document.getElementById('saveMarkupBtn').onclick = async function(){
   }catch(err){ showToast('Failed: ' + err.message, true); }
 };
 
+document.getElementById('verifySettleBtn').onclick = async function(){
+  const account_number = document.getElementById('settleAcct').value.trim();
+  const bank_code = document.getElementById('settleBankSelect').value.trim();
+  if(!account_number || !bank_code){ showToast('Select a bank and enter an account number', true); return; }
+  try{
+    const result = await api('/v1/hub/settlement-account/resolve', { method:'POST', body: JSON.stringify({ account_number, bank_code }) });
+    verifiedAccountName = result.account_name;
+    verifiedFor = bank_code + ':' + account_number;
+    document.getElementById('settleVerifyResult').innerHTML = `<span style="color:var(--teal);">✓ Resolved: ${result.account_name}</span>`;
+    document.getElementById('saveSettleBtn').disabled = false;
+  }catch(err){
+    if(err.data?.error === 'felicity_ngn_not_configured'){
+      const manualName = prompt('Live verification isn\'t available here (Felicity not configured). Enter the account name manually — it will be saved as unverified:');
+      if(manualName){
+        verifiedAccountName = manualName.trim();
+        verifiedFor = bank_code + ':' + account_number;
+        document.getElementById('settleVerifyResult').innerHTML = `<span style="color:var(--red);">${manualName.trim()} — not verified (manual entry)</span>`;
+        document.getElementById('saveSettleBtn').disabled = false;
+      }
+      return;
+    }
+    document.getElementById('settleVerifyResult').innerHTML = `<span style="color:var(--red);">Could not verify: ${err.message}</span>`;
+    showToast('Verification failed: ' + err.message, true);
+  }
+};
+
 document.getElementById('saveSettleBtn').onclick = async function(){
   const account_number = document.getElementById('settleAcct').value.trim();
-  const account_name = document.getElementById('settleName').value.trim();
-  const bank_code = document.getElementById('settleBank').value.trim();
-  if(!account_number || !account_name || !bank_code){ showToast('All three fields are required', true); return; }
+  const bank_code = document.getElementById('settleBankSelect').value.trim();
+  if(!verifiedAccountName || verifiedFor !== bank_code + ':' + account_number){
+    showToast('Verify the account first', true); return;
+  }
   try{
-    await api('/v1/hub/settlement-account', { method:'PATCH', body: JSON.stringify({ account_number, account_name, bank_code }) });
+    await api('/v1/hub/settlement-account', { method:'PATCH', body: JSON.stringify({ account_number, bank_code, account_name: verifiedAccountName }) });
     document.getElementById('settleResult').innerHTML = '<span style="color:var(--teal);font-size:12.5px;">Saved</span>';
     showToast('Settlement account updated');
   }catch(err){ showToast('Failed: ' + err.message, true); }

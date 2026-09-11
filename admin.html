@@ -300,7 +300,7 @@ async function loadKeys(){
            </span>`
         : '—';
       const settleCell = k.type === 'hub' && k.hub_settlement_account
-        ? `<span class="mono" style="font-size:11px;">${k.hub_settlement_account.account_number}<br>${k.hub_settlement_account.account_name}</span>`
+        ? `<span class="mono" style="font-size:11px;">${k.hub_settlement_account.account_number}<br>${k.hub_settlement_account.account_name}<br><span style="color:${k.hub_settlement_account.verified ? 'var(--teal)' : 'var(--red)'};">${k.hub_settlement_account.verified ? '✓ verified' : 'not verified'}</span></span>`
         : (k.type === 'hub' ? '<span style="color:var(--red);font-size:11px;">not set</span>' : '—');
       const statusCell = k.status === 'pending'
         ? `<span style="color:var(--red);font-size:11px;">pending</span><br>

@@ -246,6 +246,8 @@
         <a href="#hub-login-link"><span class="m m-post">POST</span>hub/login-link</a>
         <a href="#hub-magic"><span class="m m-get">GET</span>hub/magic/:token</a>
         <a href="#hub-account"><span class="m m-get">GET</span>hub/account</a>
+        <a href="#hub-ngn-banks"><span class="m m-get">GET</span>reference/ngn-banks</a>
+        <a href="#hub-settlement-resolve"><span class="m m-post">POST</span>hub/settlement-account/resolve</a>
         <a href="#hub-api-key"><span class="m m-get">GET</span>hub/api-key</a>
         <a href="#hub-api-key-generate"><span class="m m-post">POST</span>hub/api-key/generate</a>
         <a href="#hub-webhook-get"><span class="m m-get">GET</span>hub/webhook</a>
@@ -708,15 +710,31 @@
           </table>
         </div>
 
-        <div class="endpoint" id="hub-settlement">
-          <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/v1/hub/settlement-account</span><span class="auth-pill hub">hub key only</span></div>
-          <div class="endpoint-desc">Where this hub's markup gets paid on every settlement.</div>
+        <div class="endpoint" id="hub-ngn-banks">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/reference/ngn-banks</span><span class="auth-pill">any key</span></div>
+          <div class="endpoint-desc">The live Nigerian bank list, straight from Felicity (<code style="font-family:var(--mono);">list_banks</code>) — ~800 real institutions when Felicity is configured, <code style="font-family:var(--mono);">{ "banks": [], "configured": false }</code> otherwise. Build a bank picker against this instead of hardcoding a code list.</div>
+        </div>
+
+        <div class="endpoint" id="hub-settlement-resolve">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/hub/settlement-account/resolve</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Real-time account-name lookup against a bank/account-number pair (Felicity's <code style="font-family:var(--mono);">resolve_account</code>) — see the resolved name before committing to save it below. <code style="font-family:var(--mono);">400</code> if the account/bank combination can't be verified; <code style="font-family:var(--mono);">422 felicity_ngn_not_configured</code> if there's nothing to verify against.</div>
           <div class="subhead">Body parameters</div>
           <table class="ptable">
             <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
             <tr><td class="pname">account_number</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">—</td></tr>
-            <tr><td class="pname">account_name</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">—</td></tr>
+            <tr><td class="pname">bank_code</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">From <a href="#hub-ngn-banks" style="color:var(--orange);">/reference/ngn-banks</a>.</td></tr>
+          </table>
+        </div>
+
+        <div class="endpoint" id="hub-settlement">
+          <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/v1/hub/settlement-account</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Where this hub's markup gets paid on every settlement. Whenever Felicity is configured, <code style="font-family:var(--mono);">account_name</code> is independently re-verified server-side via <code style="font-family:var(--mono);">resolve_account</code> — the name actually saved is always the one Felicity resolves, never whatever's in the request body, so this can never be saved under the wrong name. <code style="font-family:var(--mono);">account_name</code> is only read from the request as a fallback when Felicity isn't configured at all (nothing to verify against); the saved record's <code style="font-family:var(--mono);">verified</code> flag always reflects which happened.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">account_number</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">—</td></tr>
             <tr><td class="pname">bank_code</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">CBN bank code.</td></tr>
+            <tr><td class="pname">account_name</td><td class="ptype">string</td><td class="preq n">only if unconfigured</td><td class="pdesc">Ignored (overwritten by the verified name) whenever Felicity is configured.</td></tr>
           </table>
         </div>
 

@@ -1309,6 +1309,30 @@ async function sendNgn({ talent_ref, amount_naira, account_number, bank_code, ac
   return felicityNgn('send', { talent_ref, amount_naira, account_number, bank_code, account_name });
 }
 
+// list_banks / resolve_account — per the Felicity Partner API NGN Rail
+// Integration Brief §3 ("Bank list + account resolution — for building
+// your own send UI"). Felicity itself caches the live ~800-bank list for
+// 24h on their side; this in-memory cache just avoids re-fetching it on
+// every dashboard page load in the meantime. resolve_account is never
+// cached — it's a real-time check against a specific account/bank pair.
+let ngnBanksCache = null;
+let ngnBanksCacheAt = 0;
+const NGN_BANKS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function listNgnBanks() {
+  if (ngnBanksCache && Date.now() - ngnBanksCacheAt < NGN_BANKS_CACHE_TTL_MS) return ngnBanksCache;
+  const result = await felicityNgn('list_banks');
+  if (result?.banks) {
+    ngnBanksCache = result.banks;
+    ngnBanksCacheAt = Date.now();
+  }
+  return result;
+}
+
+async function resolveNgnAccount({ account_number, bank_code }) {
+  return felicityNgn('resolve_account', { account_number, bank_code });
+}
+
 /**
  * Test-mode-only — credits a talent's NGN balance WITHOUT a real bank
  * transfer, exactly as Felicity's own doc describes it: "same
@@ -2789,19 +2813,79 @@ app.patch('/v1/hub/markup', async (req, res) => {
   res.json({ hub_markup_bps: record.hub_markup_bps, hub_markup_cap_bps: cap });
 });
 
+// GET /v1/reference/ngn-banks — the live Nigerian bank list, straight from
+// Felicity's list_banks action (~800 real institutions in live mode, a
+// fixed sandbox list in test mode — same shape either way). Used to build
+// a real bank picker instead of a hand-maintained code list. Any
+// authenticated key can call this — it's non-sensitive reference data.
+app.get('/v1/reference/ngn-banks', async (req, res) => {
+  if (!FELICITY_NGN_CONFIGURED) return res.json({ banks: [], configured: false });
+  try {
+    const result = await listNgnBanks();
+    res.json({ banks: result?.banks || [], configured: true });
+  } catch (err) {
+    res.status(502).json({ error: 'bank_list_failed', message: err.message });
+  }
+});
+
+// POST /v1/hub/settlement-account/resolve — real-time account-name lookup
+// (Felicity's resolve_account) so a hub can SEE the resolved name before
+// committing to save it, rather than finding out something was wrong only
+// after money moves. PATCH below re-verifies independently anyway (never
+// trusts a name the client claims to have seen) — this route exists purely
+// for that "confirm before you save" UX moment.
+app.post('/v1/hub/settlement-account/resolve', async (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  if (!FELICITY_NGN_CONFIGURED) return res.status(422).json({ error: 'felicity_ngn_not_configured' });
+
+  const { account_number, bank_code } = req.body || {};
+  if (!account_number || !bank_code) {
+    return res.status(400).json({ error: 'incomplete', message: 'account_number and bank_code are both required.' });
+  }
+  try {
+    const result = await resolveNgnAccount({ account_number, bank_code });
+    res.json({ account_name: result?.account?.account_name });
+  } catch (err) {
+    res.status(err.status === 400 ? 400 : 502).json({ error: 'account_resolve_failed', message: err.message });
+  }
+});
+
 // PATCH /v1/hub/settlement-account — where this hub's OWN markup gets
-// paid, every time a talent under their pipeline gets settled.
+// paid, every time a talent under their pipeline gets settled. Whenever
+// Felicity is configured, the account is independently RE-VERIFIED here
+// server-side (never trusting a name the client claims to have already
+// resolved) — the account_name actually saved is always the one Felicity's
+// own resolve_account returns, never whatever the client submitted, so a
+// hub can never save a settlement account under a name that doesn't match
+// the real bank record. Falls back to trusting the submitted account_name
+// only if Felicity isn't configured at all (there's nothing to verify
+// against), and marks the record accordingly so that's never silently
+// indistinguishable from a real verified account.
 app.patch('/v1/hub/settlement-account', async (req, res) => {
   if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
   const record = findOwnHubKeyRecord(req.clientId);
   if (!record) return res.status(404).json({ error: 'hub_key_not_found' });
 
   const { account_number, account_name, bank_code } = req.body || {};
-  if (!account_number || !account_name || !bank_code) {
-    return res.status(400).json({ error: 'incomplete_account', message: 'account_number, account_name, and bank_code are all required.' });
+  if (!account_number || !bank_code) {
+    return res.status(400).json({ error: 'incomplete_account', message: 'account_number and bank_code are required.' });
   }
 
-  record.hub_settlement_account = { account_number, account_name, bank_code };
+  if (FELICITY_NGN_CONFIGURED) {
+    let resolved;
+    try {
+      resolved = await resolveNgnAccount({ account_number, bank_code });
+    } catch (err) {
+      return res.status(err.status === 400 ? 400 : 502).json({ error: 'account_verification_failed', message: err.message });
+    }
+    record.hub_settlement_account = { account_number, bank_code, account_name: resolved?.account?.account_name, verified: true };
+  } else {
+    if (!account_name) {
+      return res.status(400).json({ error: 'incomplete_account', message: 'account_name is required — Felicity isn\'t configured here, so it can\'t be verified automatically.' });
+    }
+    record.hub_settlement_account = { account_number, bank_code, account_name, verified: false };
+  }
+
   await saveState();
   res.json({ hub_settlement_account: record.hub_settlement_account });
 });
