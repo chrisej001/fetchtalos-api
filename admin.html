@@ -474,9 +474,13 @@ async function loadNgnContracts(){
       const insurance = c.coverage_status === 'active'
         ? `<span style="font-size:11px;color:var(--teal);">${c.coverage_policy_id||''}${c.coverage_policy_document_url ? '<br><a href="'+c.coverage_policy_document_url+'" target="_blank" style="color:var(--amber);">document ready</a>' : '<br><span style="color:var(--text-faint);">doc pending</span>'}</span>`
         : c.coverage_status && c.coverage_status !== 'not_yet_purchased' ? `<span style="font-size:11px;color:var(--red);">${c.coverage_status}</span>` : '<span style="color:var(--text-faint);">not yet — first payment</span>';
+      const progress = c.ngn_settlement_progress;
+      const progressLine = progress
+        ? `<br><span style="font-size:10px;color:var(--text-faint);">legs already sent this cycle — fee:${progress.fee_sent?'✓':'—'} markup:${progress.markup_sent?'✓':'—'} salary:${progress.salary_sent?'✓':'—'} insurance:${progress.insurance_purchased?'✓':'—'}</span>`
+        : '';
       const settlement = c.ngn_settlement_status
-        ? `<span style="font-size:11px;color:${c.ngn_settlement_status==='settled'?'var(--teal)':'var(--red)'};">${c.ngn_settlement_status}${c.ngn_settlement_note?'<br>'+c.ngn_settlement_note:''}</span>`
-        : '<span style="color:var(--text-faint);font-size:11px;">no payment yet</span>';
+        ? `<span style="font-size:11px;color:${c.ngn_settlement_status==='settled'?'var(--teal)':'var(--red)'};">${c.ngn_settlement_status}${c.ngn_settlement_note?'<br>'+c.ngn_settlement_note:''}${progressLine}</span>`
+        : (progress ? `<span style="font-size:11px;color:var(--red);">stuck mid-settlement${progressLine}</span>` : '<span style="color:var(--text-faint);font-size:11px;">no payment yet</span>');
       return `<tr>
         <td class="mono" style="font-size:11px;">${c.contract_id}<br><span style="color:var(--text-faint);">${c.employer_name}</span></td>
         <td>${c.talent_name}</td>

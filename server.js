@@ -1538,7 +1538,33 @@ async function settleNgnPayment(contract) {
   const alreadyPaidCount = [...db.payPeriods.values()].filter(p => p.contract_id === contract.contract_id && p.paid_at).length;
   const isFirstPayment = alreadyPaidCount === 0; // still needed below for the pay-period email copy — a renewal on payment 13 is NOT "first payment"
 
-  if (isInsuranceRenewalDue) {
+  // Which still-open period this attempt is actually for — used only to
+  // detect whether we're RESUMING the same cycle's settlement (a retry
+  // after a partial failure) or starting a genuinely new one. See
+  // ngn_settlement_progress just below.
+  const openPeriod = [...db.payPeriods.values()]
+    .filter(p => p.contract_id === contract.contract_id && !p.paid_at)
+    .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0];
+
+  // Per-leg progress for the CURRENT cycle, persisted on the contract so
+  // it survives across separate calls (a real webhook retry, or the admin
+  // "Resettle" button). Reset only when the target period actually
+  // changes — i.e. a genuinely new cycle, not a retry of this one. This
+  // closes a real gap: previously, if e.g. the salary leg failed (bad
+  // bank code) after the platform fee and hub markup had ALREADY sent for
+  // real, a retry would blindly re-attempt fee and markup too — risking a
+  // duplicate real payout, or an incorrect "insufficient balance" because
+  // the balance check counted money that had already gone out and wasn't
+  // sitting in the account to send again.
+  if (!contract.ngn_settlement_progress || contract.ngn_settlement_progress.period_number !== (openPeriod?.period_number ?? null)) {
+    contract.ngn_settlement_progress = {
+      period_number: openPeriod?.period_number ?? null,
+      insurance_purchased: false, fee_sent: false, markup_sent: false, salary_sent: false,
+    };
+  }
+  const progress = contract.ngn_settlement_progress;
+
+  if (isInsuranceRenewalDue && !progress.insurance_purchased) {
     // Reset before re-checking, not just before the FIRST purchase — a
     // renewal on payment 13 needs its own "did THIS cycle's document just
     // arrive" detection, not blocked by cycle 1's already-populated URL
@@ -1550,6 +1576,7 @@ async function settleNgnPayment(contract) {
     const hadDocumentBefore = false;
     const coverage = await buyInsuranceNgn({ talent, contract });
     Object.assign(contract, coverage);
+    if (coverage.coverage_status === 'active') progress.insurance_purchased = true;
 
     // This was the real gap: in test mode, Felicity returns
     // policy_document_url synchronously inside buyInsuranceNgn's own
@@ -1576,24 +1603,34 @@ async function settleNgnPayment(contract) {
 
   const currentBalanceNaira = currentBalanceKobo / 100;
   // The talent's salary is a FIXED, PROTECTED amount — never computed as
-  // "whatever's left after fees." If the balance can't cover salary + fee
-  // + markup IN FULL, nothing is sent to anyone rather than silently
+  // "whatever's left after fees." If the balance can't cover what's still
+  // owed IN FULL, nothing further is sent rather than silently
   // shortchanging the talent to make the numbers fit. This was a real bug
   // caught in testing: an earlier version computed the talent's amount as
   // a leftover subtraction, which meant an enterprise underpayment reduced
   // what the TALENT received instead of being flagged as a shortfall —
   // directly contradicting the mark-up model's core guarantee that fees
   // are always additive, never deducted from the talent.
-  const totalOwed = +(salaryNaira + platformFeeNaira + hubMarkupNaira).toFixed(2);
+  //
+  // "Still owed" excludes any leg already sent in an earlier attempt at
+  // THIS SAME cycle (progress, above) — that money already left for real
+  // and isn't sitting in this balance to be checked against again.
   const remainingForTalent = salaryNaira;
+  const stillOwed = +(
+    (progress.salary_sent ? 0 : remainingForTalent) +
+    (progress.fee_sent ? 0 : platformFeeNaira) +
+    (progress.markup_sent ? 0 : hubMarkupNaira)
+  ).toFixed(2);
 
-  if (currentBalanceNaira < totalOwed) {
+  if (currentBalanceNaira < stillOwed) {
+    const alreadySentNote = (progress.fee_sent || progress.markup_sent || progress.salary_sent)
+      ? ' (one or more legs already sent in an earlier attempt at this cycle — not re-counted here, and not re-sent)' : '';
     return {
       ngn_settlement_status: 'insufficient_balance',
-      ngn_settlement_note: `Balance (₦${currentBalanceNaira}) is short of what's owed: ₦${salaryNaira} salary + ₦${platformFeeNaira} platform fee + ₦${hubMarkupNaira} hub markup = ₦${totalOwed}. Nothing was sent — the talent's salary is never reduced to cover a shortfall.`,
+      ngn_settlement_note: `Balance (₦${currentBalanceNaira}) is short of what's still owed: ₦${stillOwed}${alreadySentNote}. Nothing further was sent — the talent's salary is never reduced to cover a shortfall.`,
     };
   }
-  if (hubMarkupNaira > 0 && !hubSettlement) {
+  if (hubMarkupNaira > 0 && !hubSettlement && !progress.markup_sent) {
     return {
       ngn_settlement_status: 'hub_settlement_account_missing',
       ngn_settlement_note: `This hub has a markup (${hubMarkupBps}bps) configured but no settlement account on file — set one via PATCH /admin/keys/:apiKey before payments can settle.`,
@@ -1601,19 +1638,27 @@ async function settleNgnPayment(contract) {
   }
 
   try {
-    if (platformFeeNaira > 0 && PLATFORM_ACCOUNT) {
+    if (platformFeeNaira > 0 && PLATFORM_ACCOUNT && !progress.fee_sent) {
       await sendNgn({ talent_ref: contract.contract_id, amount_naira: platformFeeNaira, account_number: PLATFORM_ACCOUNT.account_number, bank_code: PLATFORM_ACCOUNT.bank_code, account_name: PLATFORM_ACCOUNT.account_name });
+      progress.fee_sent = true;
     }
-    if (hubMarkupNaira > 0 && hubSettlement) {
+    if (hubMarkupNaira > 0 && hubSettlement && !progress.markup_sent) {
       await sendNgn({ talent_ref: contract.contract_id, amount_naira: hubMarkupNaira, account_number: hubSettlement.account_number, bank_code: hubSettlement.bank_code, account_name: hubSettlement.account_name });
+      progress.markup_sent = true;
     }
-    if (remainingForTalent > 0) {
+    if (remainingForTalent > 0 && !progress.salary_sent) {
       await sendNgn({ talent_ref: contract.contract_id, amount_naira: remainingForTalent, account_number: talent.rubies_account_number, bank_code: talent.rubies_bank_code, account_name: talent.rubies_account_name });
+      progress.salary_sent = true;
     }
   } catch (err) {
     console.warn('[felicity-ngn] send failed mid-settlement:', err.message);
     return { ngn_settlement_status: 'send_failed', ngn_settlement_note: err.message };
   }
+
+  // Every leg this cycle actually needed is done — clear progress so the
+  // NEXT cycle (a fresh period, once one exists) starts with a clean slate
+  // rather than inheriting this one's now-irrelevant flags.
+  contract.ngn_settlement_progress = null;
 
   // Real history, not a snapshot — this is what GET /v1/hub/stats actually
   // sums from. Recorded only once we're past every failure point above,
