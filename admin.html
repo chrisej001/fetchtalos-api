@@ -192,6 +192,10 @@
         <tbody id="ngnContractsTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
 
+      <div class="panel-head" style="margin-top:34px;"><h2>Payment due reminders</h2><p class="sub">POST /admin/felicity-ngn/send-due-reminders &mdash; also runs automatically every hour in the background (checking a 3-day window), so this is mainly for testing or forcing an immediate send.</p></div>
+      <button class="btn-primary row-btn" id="sendDueRemindersBtn">Send due reminders now</button>
+      <div id="dueRemindersResult" style="margin-top:10px;"></div>
+
       <div class="panel-head" style="margin-top:34px;"><h2>Webhook activity (last 50)</h2><p class="sub">GET /admin/webhook-log &mdash; every delivery attempt to /webhooks/felicity, including signature failures. Check this FIRST if a simulated deposit seems to do nothing.</p></div>
       <button class="row-btn" id="refreshWebhookLogBtn" style="margin-bottom:14px;">↻ Refresh</button>
       <div class="tbl-wrap">
@@ -508,6 +512,14 @@ async function loadWebhookLog(){
   }catch(err){ showToast('Failed to load webhook log: ' + err.message, true); }
 }
 document.getElementById('refreshWebhookLogBtn').onclick = loadWebhookLog;
+
+document.getElementById('sendDueRemindersBtn').onclick = async function(){
+  try{
+    const result = await api('/admin/felicity-ngn/send-due-reminders', { method:'POST' });
+    document.getElementById('dueRemindersResult').innerHTML = `<span style="color:var(--teal);font-size:12.5px;">Checked ${result.results.length} due/overdue contract(s), sent ${result.reminders_sent} reminder(s).</span>`;
+    showToast(`${result.reminders_sent} reminder(s) sent`);
+  }catch(err){ showToast('Failed: ' + err.message, true); }
+};
 
 window.ngnAction = async function(action, contractId){
   try{

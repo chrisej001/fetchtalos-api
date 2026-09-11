@@ -1259,6 +1259,51 @@ async function sendPaymentReminderEmail(contract, period) {
   });
 }
 
+/**
+ * Notifies the employer that their candidate confirmed the interview —
+ * the only signal they'd otherwise have no way to know about short of
+ * polling, since confirming is something the TALENT does asynchronously,
+ * off-platform, on their own time. Fired from GET /v1/engagements/:id/accept.
+ */
+async function sendEmployerInterviewConfirmedEmail(engagement) {
+  if (!engagement.employer_email) return { sent: false, reason: 'employer_missing_email' };
+  return sendEmail({
+    to: engagement.employer_email,
+    subject: `${engagement.talent_name} confirmed the interview`,
+    html: emailShell({
+      preheader: `${engagement.talent_name} confirmed for the ${engagement.role_title || 'role'} interview.`,
+      icon: { glyph: '&#10003;', accent: '#2fe6c6' },
+      headline: 'Interview confirmed',
+      bodyHtml: `<b style="color:#f2f5f7;">${engagement.talent_name}</b> has confirmed the <b style="color:#f2f5f7;">${engagement.role_title || 'role'}</b> interview${engagement.proposed_time ? ` for ${engagement.proposed_time}` : ''}.
+        ${emailInfoRows([{ label: 'Meeting link', value: `<a href="${engagement.interview_link}" style="color:#2fe6c6;">${engagement.interview_link}</a>` }])}
+        Once the interview's done, send the contract from your own integration whenever you're ready to move forward.`,
+    }),
+  });
+}
+
+/**
+ * Notifies the employer that their candidate accepted the contract and is
+ * now active — same reasoning as above, this is the TALENT'S action, not
+ * something the employer can see happen in real time otherwise. Fired
+ * from finalizeContractAcceptance, right alongside the talent's own
+ * welcome email, so both sides learn the contract went active at the same
+ * moment.
+ */
+async function sendEmployerContractAcceptedEmail(contract) {
+  if (!contract.employer_email) return { sent: false, reason: 'employer_missing_email' };
+  return sendEmail({
+    to: contract.employer_email,
+    subject: `${contract.talent_name} accepted the contract — now active`,
+    html: emailShell({
+      preheader: `${contract.talent_name}'s contract is now active.`,
+      icon: { glyph: '&#10003;', accent: '#2fe6c6' },
+      headline: 'Contract accepted',
+      bodyHtml: `<b style="color:#f2f5f7;">${contract.talent_name}</b> accepted the <b style="color:#f2f5f7;">${contract.role_title || 'role'}</b> contract and is now active. Their first pay period has already started.
+        <div style="margin-top:14px;">Check your own integration's <code style="font-family:'JetBrains Mono',Menlo,Consolas,monospace;background-color:#171b24;padding:2px 6px;border-radius:4px;">GET /v1/contracts/${contract.contract_id}/amount-due</code> any time for the exact amount owed this cycle — you'll also get a reminder email as each payment date approaches.</div>`,
+    }),
+  });
+}
+
 /** Thin wrapper around the `send` action. */
 async function sendNgn({ talent_ref, amount_naira, account_number, bank_code, account_name }) {
   return felicityNgn('send', { talent_ref, amount_naira, account_number, bank_code, account_name });
@@ -2987,6 +3032,11 @@ app.get('/v1/engagements/:id/accept', async (req, res) => {
   if (engagement.status === 'interview_invited') {
     engagement.status = 'interview_accepted';
     await saveState();
+    try {
+      await sendEmployerInterviewConfirmedEmail(engagement);
+    } catch (err) {
+      console.warn('[engagements] employer interview-confirmed email failed (acceptance itself still succeeded):', err.message);
+    }
   }
   res.send(talentPage({
     title: 'Interview confirmed — FetchTalos',
@@ -3274,6 +3324,11 @@ async function finalizeContractAcceptance(contract) {
   createNextPayPeriod(contract, new Date());
 
   await sendWelcomeEmail(contract, talent);
+  try {
+    await sendEmployerContractAcceptedEmail(contract);
+  } catch (err) {
+    console.warn('[contracts] employer contract-accepted email failed (acceptance itself still succeeded):', err.message);
+  }
   await saveState();
 }
 
@@ -4046,21 +4101,19 @@ app.get('/admin/webhook-log', requireAdminKey, (req, res) => {
 // exactly what makes this proactive instead of "the enterprise has to
 // remember to check the dashboard themselves."
 //
-// HONEST CAVEAT ON SCHEDULING: this needs to run roughly once a day to
-// actually work as a reminder system. There's no real cron running
-// inside this app right now — calling this endpoint is the only thing
-// that triggers it. Two ways to make that happen for real:
-//   1. (Recommended) Point an external scheduler at this URL daily —
-//      Render's own Cron Jobs feature, or a free service like
-//      cron-job.org, hitting this exact endpoint with the admin key.
-//   2. Trigger it manually whenever needed, from here or the admin
-//      console — works for testing and demos, not a substitute for #1.
+// SCHEDULING: the actual sweep is runDueReminderSweep() (defined just
+// above), called automatically every hour by a setInterval right after
+// this route — safe to run that often since last_reminder_sent_for_period
+// already prevents re-sending the same reminder on every check. This
+// route is the manual/on-demand path (also exposed as a button in
+// admin.html) — useful for testing or forcing an immediate send, but not
+// required for reminders to actually go out day to day anymore.
 // Duplicate-prevention: each contract remembers which period it was last
 // reminded about (contract.last_reminder_sent_for_period), so running
 // this daily won't re-email the same enterprise five times about the
 // same upcoming payment.
-app.post('/admin/felicity-ngn/send-due-reminders', requireAdminKey, async (req, res) => {
-  const windowDays = Number(req.body?.window_days) || 3;
+async function runDueReminderSweep(windowDays) {
+  windowDays = Number(windowDays) || 3;
   const now = new Date();
   const windowEnd = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
 
@@ -4086,8 +4139,25 @@ app.post('/admin/felicity-ngn/send-due-reminders', requireAdminKey, async (req, 
   }
 
   await saveState();
-  res.json({ checked_window_days: windowDays, reminders_sent: results.filter(r => r.sent).length, results });
+  return { checked_window_days: windowDays, reminders_sent: results.filter(r => r.sent).length, results };
+}
+
+app.post('/admin/felicity-ngn/send-due-reminders', requireAdminKey, async (req, res) => {
+  const summary = await runDueReminderSweep(req.body?.window_days);
+  res.json(summary);
 });
+
+// Real automatic daily trigger — runs in-process rather than requiring an
+// external cron service, since this server already runs continuously on
+// a paid Render instance (no more cold-start restarts wiping timers). One
+// check per hour is cheap and makes the "once a day" promise actually
+// true without needing to track exact wall-clock time across restarts;
+// contract.last_reminder_sent_for_period already prevents re-sending the
+// same reminder on every one of those hourly checks.
+const DUE_REMINDER_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+setInterval(() => {
+  runDueReminderSweep(3).catch(err => console.warn('[due-reminders] automatic sweep failed:', err.message));
+}, DUE_REMINDER_SWEEP_INTERVAL_MS);
 
 /* ---------------------------------------------------------------------- *
  * POST /webhooks/dropbox-sign — PUBLIC. Register this exact URL in
