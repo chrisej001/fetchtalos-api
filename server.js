@@ -501,6 +501,25 @@ function resolveCoverageProduct(plan, products) {
   return null;
 }
 
+// Unwraps whatever shape list_insurance_products actually returned into a
+// plain array. Confirmed live (2026-09) against the real response: it's
+// DOUBLE-nested — { products: { total_count, total_results, products: [...] } }
+// — not the single-level { products: [...] } the doc's abbreviated example
+// implied. Every one of the four call sites below used to guess this shape
+// inline and independently; centralized here after that guess turned out
+// wrong and broke product resolution for every plan, not just the unmapped
+// ones, the moment this app started hitting the real live catalog instead
+// of the test sandbox. Checked defensively in case the exact nesting
+// varies by mode or changes again upstream.
+function extractInsuranceProducts(catalog) {
+  if (Array.isArray(catalog)) return catalog;
+  if (Array.isArray(catalog?.products?.products)) return catalog.products.products;
+  if (Array.isArray(catalog?.products)) return catalog.products;
+  if (Array.isArray(catalog?.data?.products)) return catalog.data.products;
+  if (Array.isArray(catalog?.data)) return catalog.data;
+  return null;
+}
+
 // Required by buy_insurance on the NGN rail (§4 of the doc) — the specific
 // benefit line items a product covers, matched against what that product
 // actually offers. Confirmed ONLY for the basic plan, via its own real
@@ -1053,7 +1072,7 @@ async function onboardTalentNgn({ talent, contract }) {
  */
 async function buyInsuranceNgn({ talent, contract }) {
   const catalog = await listInsuranceProductsNgn().catch(() => null);
-  const products = catalog?.products || catalog?.data || (Array.isArray(catalog) ? catalog : null);
+  const products = extractInsuranceProducts(catalog);
   const product = resolveCoverageProduct(contract.coverage_plan, products);
   const product_id = product ? (product.id || product.product_id) : null;
   if (!product_id) return { coverage_status: 'gap_not_configured', coverage_note: `No product found for plan "${contract.coverage_plan}" — neither the pinned MYCOVER_PRODUCT_ID_* nor the COVERAGE_PRODUCT_NAME_FALLBACK name matched anything in the current catalog.` };
@@ -1124,7 +1143,7 @@ async function buyInsuranceNgn({ talent, contract }) {
  */
 async function quoteInsuranceNgn({ plan, coverage_months }) {
   const catalog = await listInsuranceProductsNgn().catch(() => null);
-  const products = catalog?.products || catalog?.data || (Array.isArray(catalog) ? catalog : null);
+  const products = extractInsuranceProducts(catalog);
   const product = resolveCoverageProduct(plan, products);
   const product_id = product ? (product.id || product.product_id) : null;
   if (!product_id) return { error: 'gap_not_configured', message: `No product found for plan "${plan}" in the current catalog.` };
@@ -1165,7 +1184,7 @@ async function listInsuranceProductsNgn() {
     return ngnInsuranceCatalogCache;
   }
   const result = await felicityNgn('list_insurance_products');
-  const products = result?.products || result?.data;
+  const products = extractInsuranceProducts(result);
   if (Array.isArray(products) && products.length) {
     ngnInsuranceCatalogCache = result;
     ngnInsuranceCatalogCacheAt = Date.now();
@@ -1213,9 +1232,8 @@ async function estimateInsuranceForDisplay(contract) {
   if (quote.premium_naira != null) return { naira: quote.premium_naira, isLiveQuote: true };
   try {
     const catalog = await listInsuranceProductsNgn();
-    const products = catalog.products || catalog.data || catalog;
-    const productId = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
-    const product = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
+    const products = extractInsuranceProducts(catalog);
+    const product = resolveCoverageProduct(contract.coverage_plan, products);
     return { naira: koboFieldToNaira(product, 'base_premium', 'base_premium_naira') || 0, isLiveQuote: false };
   } catch (err) {
     return { naira: 0, isLiveQuote: false };
@@ -2143,20 +2161,18 @@ app.get('/admin/felicity-ngn/products', requireAdminKey, async (req, res) => {
   if (!FELICITY_NGN_CONFIGURED) return res.status(422).json({ error: 'felicity_ngn_not_configured' });
   try {
     const result = await listInsuranceProductsNgn();
-    let products = result.products || result.data || result;
+    const products = extractInsuranceProducts(result);
     if (req.query.plan) {
-      const productId = COVERAGE_PRODUCT_IDS[req.query.plan];
-      if (!productId) return res.status(400).json({ error: 'unknown_plan', message: `"${req.query.plan}" isn't in COVERAGE_PRODUCT_IDS` });
-      const match = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
+      const match = resolveCoverageProduct(req.query.plan, products);
       // base_premium_confirmed_naira is a computed field WE add — not raw
       // from Felicity — kept alongside the untouched raw product data so
       // this stays useful as a diagnostic (see what they actually sent)
       // while also showing the corrected figure directly, confirmed via
       // Felicity's own kobo disclosure, not a guess.
       return res.json({
-        plan: req.query.plan, product_id: productId, product: match || null,
+        plan: req.query.plan, product_id: match ? (match.id || match.product_id) : null, product: match || null,
         base_premium_confirmed_naira: match ? koboFieldToNaira(match, 'base_premium', 'base_premium_naira') : null,
-        note: match ? undefined : 'Product ID not found in the returned catalog — check COVERAGE_PRODUCT_IDS against a live product_id.',
+        note: match ? undefined : `No product found for "${req.query.plan}" — neither the pinned COVERAGE_PRODUCT_IDS entry nor the COVERAGE_PRODUCT_NAME_FALLBACK name matched anything in the current catalog.`,
       });
     }
     res.json({ count: Array.isArray(products) ? products.length : undefined, products });
@@ -2560,7 +2576,7 @@ app.get('/v1/plans', async (req, res) => {
   }
   try {
     const catalog = await listInsuranceProductsNgn();
-    const products = catalog.products || catalog.data || catalog;
+    const products = extractInsuranceProducts(catalog);
     const plans = Object.keys(COVERAGE_PRODUCT_NAME_FALLBACK).map((planKey) => {
       const label = coveragePlanCopy[planKey]?.label || planKey;
       const product = resolveCoverageProduct(planKey, products);
