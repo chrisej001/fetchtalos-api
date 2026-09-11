@@ -246,6 +246,10 @@
         <a href="#hub-login-link"><span class="m m-post">POST</span>hub/login-link</a>
         <a href="#hub-magic"><span class="m m-get">GET</span>hub/magic/:token</a>
         <a href="#hub-account"><span class="m m-get">GET</span>hub/account</a>
+        <a href="#hub-api-key"><span class="m m-get">GET</span>hub/api-key</a>
+        <a href="#hub-api-key-generate"><span class="m m-post">POST</span>hub/api-key/generate</a>
+        <a href="#hub-webhook-get"><span class="m m-get">GET</span>hub/webhook</a>
+        <a href="#hub-webhook-patch"><span class="m m-patch">PATCH</span>hub/webhook</a>
         <a href="#hub-markup"><span class="m m-patch">PATCH</span>hub/markup</a>
         <a href="#hub-settlement"><span class="m m-patch">PATCH</span>hub/settlement-account</a>
         <a href="#hub-notification"><span class="m m-patch">PATCH</span>hub/notification-email</a>
@@ -297,7 +301,7 @@
 
         <div class="note info" style="margin-top:18px;">
           <div class="dot">i</div>
-          <div>Enterprise keys are still issued directly — <a href="/#cta" style="color:var(--orange);text-decoration:underline;">request access</a>. Hub keys are self-service: see <a href="#hub-signup" style="color:var(--orange);text-decoration:underline;">POST /v1/hub/signup</a> below. A new hub's key is minted immediately but stays inactive until FetchTalos approves it — you'll get an email once it's live.</div>
+          <div>Enterprise keys are still issued directly — <a href="/#cta" style="color:var(--orange);text-decoration:underline;">request access</a>. Hub keys are self-service: see <a href="#hub-signup" style="color:var(--orange);text-decoration:underline;">POST /v1/hub/signup</a> below. A new hub's key is minted immediately but stays inactive until FetchTalos approves it — you'll get an email once it's live. The hub dashboard itself logs in by email (<a href="#hub-login-link" style="color:var(--orange);text-decoration:underline;">login-link</a>) rather than the key — the key is a separate thing you generate from the dashboard's Settings tab for your <i>own</i> systems to call this API with.</div>
         </div>
       </section>
 
@@ -661,7 +665,32 @@
 
         <div class="endpoint" id="hub-magic">
           <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/hub/magic/:token</span><span class="auth-pill public">public — no key</span></div>
-          <div class="endpoint-desc">Exchanges a one-time login-link token for your actual API key. Single-use and expires in 15 minutes. Returns <code style="font-family:var(--mono);">status: "pending"</code> instead of a key if your account is still awaiting approval, or <code style="font-family:var(--mono);">400 invalid_or_expired_link</code> for an unknown, already-used, or expired token.</div>
+          <div class="endpoint-desc">Exchanges a one-time login-link token for a <b>dashboard session token</b> — never your real API key. Use the returned <code style="font-family:var(--mono);">session_token</code> as a bearer credential (<code style="font-family:var(--mono);">Authorization: Bearer ft_session_...</code>) on any hub-scoped route below; it works identically to your API key but is separate from it and can't be used to build against the API in your own systems. Single-use and expires in 15 minutes. Returns <code style="font-family:var(--mono);">status: "pending"</code> instead if your account is still awaiting approval, or <code style="font-family:var(--mono);">400 invalid_or_expired_link</code> for an unknown, already-used, or expired token.</div>
+        </div>
+
+        <div class="endpoint" id="hub-api-key">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/hub/api-key</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Whether you have a real API key yet, and a masked preview if so. Never the raw value — that's shown exactly once, at generation/rotation time.</div>
+        </div>
+
+        <div class="endpoint" id="hub-api-key-generate">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/hub/api-key/generate</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Mints a fresh live key for use in your <b>own systems</b> — not for logging into this dashboard, which uses <a href="#hub-login-link" style="color:var(--orange);">login-link</a> instead. If you already have one, this <b>rolls</b> it: the old value stops working immediately. The raw key is returned in this one response only — copy it now. Rotating never affects an active dashboard session (sessions and keys are tracked independently).</div>
+        </div>
+
+        <div class="endpoint" id="hub-webhook-get">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/hub/webhook</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Current webhook URL and signing secret. The secret is returned in full every time (unlike the API key) — it's only ever used to verify incoming payloads, never to authenticate as you.</div>
+        </div>
+
+        <div class="endpoint" id="hub-webhook-patch">
+          <div class="endpoint-head"><span class="method patch">PATCH</span><span class="path">/v1/hub/webhook</span><span class="auth-pill hub">hub key only</span></div>
+          <div class="endpoint-desc">Sets (or clears, with an empty string) where FetchTalos POSTs real-time events for your pipeline — currently fires on <code style="font-family:var(--mono);">payment.settled</code>, whenever a talent under your pipeline gets paid. Each delivery is signed: <code style="font-family:var(--mono);">X-FetchTalos-Signature</code> is an HMAC-SHA256 of the raw JSON body using your signing secret, the same scheme this server itself uses to verify Felicity's webhooks. A signing secret is generated once, the first time you set a URL, and stays stable across future URL changes.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">webhook_url</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">Must start with <code style="font-family:var(--mono)">http://</code> or <code style="font-family:var(--mono)">https://</code>. Pass an empty string to clear it.</td></tr>
+          </table>
         </div>
 
         <div class="endpoint" id="hub-account">

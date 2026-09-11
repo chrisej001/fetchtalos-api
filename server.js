@@ -66,10 +66,41 @@ const KEYS = process.env.FETCHTALOS_API_KEYS
     )
   : DEFAULT_KEYS;
 
+// Dashboard login sessions, separate from a hub's real API key — a magic-
+// link login hands back one of THESE, never the key itself. This is what
+// lets a hub use the dashboard without ever having a key in hand: the key
+// is a thing they generate later, in Settings, for THEIR OWN systems to
+// call this API with — it never doubles as the dashboard's own credential.
+// In-memory only, never persisted — losing sessions on restart just means
+// logging in again, not real data loss.
+const hubSessions = new Map(); // ft_session_... -> { hub_scope, expires_at }
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — no password to rotate, so a long-lived "stay logged in" session is fine
+
 function requireApiKey(req, res, next) {
   const header = req.headers.authorization || '';
-  const key = header.startsWith('Bearer ') ? header.slice(7) : null;
-  const record = key && KEYS[key];
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) {
+    return res.status(401).json({ error: 'unauthorized', message: 'Pass a valid key as: Authorization: Bearer <key>' });
+  }
+
+  if (token.startsWith('ft_session_')) {
+    const session = hubSessions.get(token);
+    if (!session || Date.now() > session.expires_at) {
+      return res.status(401).json({ error: 'session_expired', message: 'Your session has expired — log in again.' });
+    }
+    const record = Object.values(KEYS).find(r => r.type === 'hub' && r.hub_scope === session.hub_scope);
+    if (!record) return res.status(404).json({ error: 'hub_account_not_found' });
+    if (record.status === 'pending') {
+      return res.status(403).json({ error: 'account_pending_approval', message: 'This hub account is still awaiting approval — you will be emailed once your key is live.' });
+    }
+    req.clientId = record.client_id;
+    req.clientType = record.type;
+    req.hubScope = record.hub_scope;
+    req.isDashboardSession = true; // key-management routes use this to know there's no "current key" to protect from self-lockout the way a raw-key caller would expect
+    return next();
+  }
+
+  const record = KEYS[token];
   if (!record) {
     return res.status(401).json({ error: 'unauthorized', message: 'Pass a valid key as: Authorization: Bearer <key>' });
   }
@@ -1151,6 +1182,33 @@ async function sendHubPaymentNotificationEmail(contract, talent, hubKeyRecord, t
 }
 
 /**
+ * Fires a signed POST to a hub's own webhook_url, if they've set one — real-
+ * time feedback into THEIR system, the same idea as sendHubPaymentNotifi-
+ * cationEmail but machine-readable. Signed the same way this server itself
+ * verifies Felicity's webhooks (HMAC-SHA256 over the raw body), so a hub
+ * can verify authenticity with the same well-known pattern. Fire-and-forget
+ * with a short timeout — a hub's endpoint being down or slow must never
+ * affect (or even delay) the real event that triggered this.
+ */
+async function sendHubWebhook(hubKeyRecord, event, data) {
+  if (!hubKeyRecord?.webhook_url || !hubKeyRecord?.webhook_secret) return { sent: false, reason: 'no_webhook_configured' };
+  const body = JSON.stringify({ event, data, timestamp: new Date().toISOString() });
+  const signature = crypto.createHmac('sha256', hubKeyRecord.webhook_secret).update(body).digest('hex');
+  try {
+    const res = await fetch(hubKeyRecord.webhook_url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-FetchTalos-Signature': signature },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    return { sent: res.ok, status: res.status };
+  } catch (err) {
+    console.warn(`[webhook] delivery to ${hubKeyRecord.webhook_url} failed:`, err.message);
+    return { sent: false, reason: err.message };
+  }
+}
+
+/**
  * The reminder email — sent to employer_email (the HR/finance contact
  * captured at Engage time, not the talent), with the exact amount due
  * for the upcoming cycle. This is the piece that makes the "check the
@@ -1381,6 +1439,20 @@ async function settleNgnPayment(contract) {
     } catch (err) {
       console.warn('[felicity-ngn] hub notification email failed (settlement itself still succeeded):', err.message);
     }
+  }
+  // Real-time webhook — fires regardless of markup amount (a 0%-markup hub
+  // still wants to know "your talent just got paid"), unlike the email
+  // above which is specifically about markup earned.
+  if (hubKeyRecord) {
+    sendHubWebhook(hubKeyRecord, 'payment.settled', {
+      contract_id: contract.contract_id,
+      talent_name: talent.name,
+      talent_id: talent.talent_id,
+      employer_name: contract.employer_name,
+      salary_naira: remainingForTalent,
+      hub_markup_naira: hubMarkupNaira,
+      settled_at: new Date().toISOString(),
+    }).catch(() => {}); // sendHubWebhook already catches internally; this is just defense in depth
   }
 
   const settledPeriod = settledPeriodForLedger;
@@ -2575,9 +2647,10 @@ app.post('/v1/hub/login-link', async (req, res) => {
   res.json({ ok: true, message: 'If that email has a hub account, a login link has been sent.' });
 });
 
-// GET /v1/hub/magic/:token — exchanges a one-time login token for the
-// underlying api_key. Single-use and short-lived; never distinguishes an
-// unknown token from an already-used or expired one in its response.
+// GET /v1/hub/magic/:token — exchanges a one-time login token for a
+// DASHBOARD SESSION token, never the real API key. Single-use and short-
+// lived; never distinguishes an unknown token from an already-used or
+// expired one in its response.
 app.get('/v1/hub/magic/:token', (req, res) => {
   const entry = magicLinks.get(req.params.token);
   if (!entry || entry.used || Date.now() > entry.expires_at) {
@@ -2590,7 +2663,10 @@ app.get('/v1/hub/magic/:token', (req, res) => {
   if (record.status === 'pending') {
     return res.json({ status: 'pending', hub_scope: record.hub_scope, message: 'Your account is still awaiting approval — you will be emailed once your key is live.' });
   }
-  res.json({ status: 'active', api_key: entry.api_key, client_id: record.client_id, hub_scope: record.hub_scope });
+
+  const sessionToken = `ft_session_${crypto.randomBytes(24).toString('hex')}`;
+  hubSessions.set(sessionToken, { hub_scope: record.hub_scope, expires_at: Date.now() + SESSION_TTL_MS });
+  res.json({ status: 'active', session_token: sessionToken, client_id: record.client_id, hub_scope: record.hub_scope });
 });
 
 // PATCH /v1/hub/markup — set the hub's OWN white-label markup rate, always
@@ -2648,6 +2724,71 @@ app.patch('/v1/hub/notification-email', async (req, res) => {
   record.hub_notification_email = email;
   await saveState();
   res.json({ hub_notification_email: record.hub_notification_email });
+});
+
+// GET /v1/hub/api-key — masked preview only, never the raw value. A hub
+// logged in via a dashboard session has no way to see its actual key here
+// on purpose — it's shown in full exactly once, at creation/rotation time
+// (POST /v1/hub/api-key/generate), same as Stripe/Paystack secret keys.
+app.get('/v1/hub/api-key', (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  const entry = Object.entries(KEYS).find(([, r]) => r.type === 'hub' && r.client_id === req.clientId);
+  if (!entry) return res.status(404).json({ error: 'hub_key_not_found' });
+  const [key] = entry;
+  res.json({ has_key: true, key_preview: key.slice(0, 12) + '…' + key.slice(-4) });
+});
+
+// POST /v1/hub/api-key/generate — mints a fresh live key for THIS hub to
+// use in its own systems, and returns the raw value exactly once. If one
+// already exists it's ROLLED (old value stops working immediately, same
+// KEYS record migrates to the new key string) — this is the only way to
+// get the raw key at all going forward, since it's never shown again after
+// this response. Doesn't touch any active dashboard session (sessions are
+// tracked by hub_scope, not by key), so rotating your key never logs you
+// out of the dashboard itself.
+app.post('/v1/hub/api-key/generate', async (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  const entry = Object.entries(KEYS).find(([, r]) => r.type === 'hub' && r.client_id === req.clientId);
+  if (!entry) return res.status(404).json({ error: 'hub_key_not_found' });
+  const [oldKey, record] = entry;
+
+  const newKey = `ft_live_${crypto.randomBytes(9).toString('hex')}`;
+  delete KEYS[oldKey];
+  KEYS[newKey] = record;
+  await saveState();
+  res.json({ api_key: newKey, key_preview: newKey.slice(0, 12) + '…' + newKey.slice(-4), message: 'Save this now — it will not be shown again. Use it in your own systems, not to log into this dashboard.' });
+});
+
+// GET /v1/hub/webhook — current webhook config. Signing secret is returned
+// in full (unlike the API key) since it's only ever used to VERIFY
+// incoming payloads on the hub's own end, not to authenticate as them.
+app.get('/v1/hub/webhook', (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  const record = findOwnHubKeyRecord(req.clientId);
+  if (!record) return res.status(404).json({ error: 'hub_key_not_found' });
+  res.json({ webhook_url: record.webhook_url || null, webhook_secret: record.webhook_secret || null });
+});
+
+// PATCH /v1/hub/webhook — set (or clear, with an empty webhook_url) where
+// FetchTalos POSTs real-time events for this hub's own pipeline — e.g. a
+// talent getting paid. A signing secret is generated once, the first time
+// a URL is set, and kept stable across future URL changes so existing
+// signature-verification code on the hub's end doesn't break.
+app.patch('/v1/hub/webhook', async (req, res) => {
+  if (req.clientType !== 'hub') return res.status(403).json({ error: 'hub_only' });
+  const record = findOwnHubKeyRecord(req.clientId);
+  if (!record) return res.status(404).json({ error: 'hub_key_not_found' });
+
+  const { webhook_url } = req.body || {};
+  if (webhook_url && !/^https?:\/\//.test(webhook_url)) {
+    return res.status(400).json({ error: 'invalid_url', message: 'webhook_url must start with http:// or https://.' });
+  }
+  record.webhook_url = webhook_url || null;
+  if (record.webhook_url && !record.webhook_secret) {
+    record.webhook_secret = `ft_whsec_${crypto.randomBytes(16).toString('hex')}`;
+  }
+  await saveState();
+  res.json({ webhook_url: record.webhook_url, webhook_secret: record.webhook_secret || null });
 });
 
 // GET /v1/hub/account — the hub's own current settings, so the dashboard

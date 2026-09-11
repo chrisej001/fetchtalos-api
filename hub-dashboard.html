@@ -72,6 +72,23 @@
   .calc{background:var(--bg-raised); border:1px solid var(--border); border-radius:8px; padding:16px; margin-top:14px;}
   .calc-row{display:flex; justify-content:space-between; padding:5px 0; font-size:13px;}
   .calc-row.total{border-top:1px solid var(--border); margin-top:6px; padding-top:10px; font-weight:600; color:var(--amber);}
+
+  #authScreen{min-height:calc(100vh - 61px); display:flex; align-items:center; justify-content:center; padding:40px 20px;}
+  .auth-card{background:var(--bg-surface); border:1px solid var(--border); border-radius:14px; padding:32px; width:100%; max-width:400px;}
+  .auth-card h2{font-size:22px; margin-bottom:6px;}
+  .auth-card .sub{color:var(--text-muted); font-size:13px; margin-bottom:22px;}
+  .auth-tabs{display:flex; gap:2px; background:var(--bg-input); border-radius:8px; padding:3px; margin-bottom:22px;}
+  .auth-tab{flex:1; background:none; border:none; border-radius:6px; padding:9px; font-size:13px; color:var(--text-muted);}
+  .auth-tab.active{background:var(--bg-raised); color:var(--text);}
+  .auth-tab-panel{display:none;}
+  .auth-tab-panel.active{display:block;}
+  .auth-tab-panel .field{margin-bottom:14px;}
+  .auth-tab-panel .field input{width:100%;}
+  .auth-hint{font-size:11.5px; color:var(--text-faint); margin-top:10px; line-height:1.5;}
+  .auth-advanced{margin-top:20px; border-top:1px solid var(--border); padding-top:16px;}
+  .auth-advanced summary{cursor:pointer; color:var(--text-faint); font-size:12px;}
+  .auth-advanced-fields{display:flex; flex-direction:column; gap:8px; margin-top:12px;}
+  .key-reveal{background:var(--bg-raised); border:1px solid var(--teal); border-radius:8px; padding:14px; margin-top:14px; word-break:break-all;}
 </style>
 </head>
 <body>
@@ -81,49 +98,57 @@
     <svg viewBox="0 0 22 22" fill="none" width="21" height="21"><circle cx="4" cy="11" r="3" stroke="#2fe6c6" stroke-width="1.6"/><circle cx="18" cy="11" r="3" stroke="#ff8a4c" stroke-width="1.6"/><line x1="7" y1="11" x2="15" y2="11" stroke="#97a1b0" stroke-width="1.6" stroke-dasharray="1.5 2"/></svg>
     FetchTalos <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--text-faint);font-weight:500;border:1px solid var(--border);border-radius:100px;padding:2px 8px;margin-left:2px;">HUB</span>
   </h1>
-  <div class="conn">
-    <input class="search-input" id="baseUrlInput" value="https://fetchtalos.onrender.com" style="width:260px;">
-    <input id="hubKeyInput" placeholder="Your hub API key" style="width:220px;">
-    <button class="btn-primary" id="connectBtn">Connect</button>
-    <span><span class="status-dot" id="connDot"></span> <span id="connLabel">not connected</span></span>
-    <button class="row-btn" id="logoutBtn" style="display:none;">Log out</button>
+  <div class="conn" id="connectedBar" style="display:none;">
+    <span><span class="status-dot on" id="connDot"></span> <span id="connLabel"></span></span>
+    <button class="row-btn" id="logoutBtn">Log out</button>
   </div>
 </div>
 
-<div class="layout">
+<div id="authScreen">
+  <div class="auth-card">
+    <h2>Hub partner access</h2>
+    <p class="sub">Log in with your registered email, or claim your hub if this is your first time here.</p>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="authTabLoginBtn" data-tab="login">Log in</button>
+      <button class="auth-tab" id="authTabSignupBtn" data-tab="signup">Claim your hub</button>
+    </div>
+
+    <div class="auth-tab-panel active" id="authTab-login">
+      <div class="field"><label>Your registered contact email</label><input id="loginEmailInput" type="email" placeholder="you@yourhub.com"></div>
+      <button class="btn-primary" id="loginLinkBtn" style="width:100%;">Email me a login link</button>
+      <p class="auth-hint">We'll send a one-time link, valid 15 minutes — no password needed.</p>
+    </div>
+
+    <div class="auth-tab-panel" id="authTab-signup">
+      <div class="field"><label>Business / hub name</label><input id="signupClientId" placeholder="e.g. ALX Africa Ltd"></div>
+      <div class="field"><label>Pipeline name</label><input id="signupHubScope" placeholder="e.g. ALX Africa"></div>
+      <div class="field"><label>Contact email</label><input id="signupEmail" type="email" placeholder="you@yourhub.com"></div>
+      <button class="btn-primary" id="signupBtn" style="width:100%;">Request a hub account</button>
+      <p class="auth-hint">Reviewed manually — you'll get an email once it's approved and you can log in.</p>
+    </div>
+
+    <details class="auth-advanced">
+      <summary>Advanced: connect with an existing key</summary>
+      <div class="auth-advanced-fields">
+        <input id="baseUrlInput" placeholder="API base URL">
+        <input id="hubKeyInput" placeholder="Your hub API key">
+        <button class="btn-secondary" id="connectBtn" style="width:100%;">Connect</button>
+      </div>
+    </details>
+  </div>
+</div>
+
+<div class="layout" id="dashboardApp" style="display:none;">
 <div class="tabbar">
   <button class="tabbtn active" data-panel="overview">Overview</button>
   <button class="tabbtn" data-panel="talents">My Talents</button>
   <button class="tabbtn" data-panel="markup">Markup &amp; Settlement</button>
+  <button class="tabbtn" data-panel="settings">Settings</button>
   <button class="tabbtn" data-panel="plans">Plans</button>
   <button class="tabbtn" data-panel="simulate">Simulate an Enterprise</button>
 </div>
 
 <main>
-  <div class="banner" id="authBanner">
-    <div id="authGate">
-      <b>Get access:</b>
-      <a href="#" id="showSignup" style="color:var(--amber);text-decoration:underline;">Claim your hub</a> (new here) &middot;
-      <a href="#" id="showLogin" style="color:var(--amber);text-decoration:underline;">Log in by email</a> (already registered, lost your key) &middot;
-      or paste your key directly in the bar above.
-    </div>
-    <div id="signupForm" style="display:none;margin-top:12px;">
-      <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:0;">
-        <input id="signupClientId" placeholder="Business / hub name">
-        <input id="signupHubScope" placeholder="Pipeline name (e.g. ALX Africa)">
-        <input id="signupEmail" type="email" placeholder="Contact email">
-      </div>
-      <div style="margin-top:10px;">
-        <button class="btn-primary row-btn" id="signupBtn">Request a hub account</button>
-        <span style="color:var(--text-faint);font-size:11.5px;margin-left:8px;">Reviewed manually — you'll get an email with your live key once it's approved.</span>
-      </div>
-    </div>
-    <div id="loginForm" style="display:none;margin-top:12px;">
-      <input id="loginEmailInput" type="email" placeholder="Your registered contact email" style="width:260px;">
-      <button class="btn-primary row-btn" id="loginLinkBtn">Email me a login link</button>
-    </div>
-  </div>
-
   <section class="panel active" id="panel-overview">
     <div class="panel-head"><h2>Overview</h2><p class="sub">GET /v1/hub/stats — your own activity only</p></div>
     <div class="stat-strip" id="statsStrip">
@@ -197,6 +222,26 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
       <div class="field" style="max-width:340px;"><label>Notification email</label><input id="notifyEmail" type="email" placeholder="e.g. team@yourhub.com"></div>
       <button class="btn-primary" id="saveNotifyEmailBtn">Save notification email</button>
       <div id="notifyEmailResult" style="margin-top:10px;"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-settings">
+    <div class="panel-head"><h2>Settings</h2><p class="sub">Your API key and webhook — for building against FetchTalos from your own systems. Not needed to use this dashboard, which you're already logged into by email.</p></div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3 style="font-size:15px;">API key</h3>
+      <p style="font-size:12.5px; color:var(--text-muted); margin:8px 0 14px;">Use this in your own backend to call the FetchTalos API directly — <code>Authorization: Bearer &lt;key&gt;</code>. It's shown in full only once, right after you generate or regenerate it.</p>
+      <div id="apiKeyStatus" style="font-size:13px; color:var(--text-muted);">// connect to load</div>
+      <button class="btn-primary" id="generateKeyBtn" style="margin-top:12px;">Generate API key</button>
+      <div id="apiKeyReveal"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:15px;">Webhook</h3>
+      <p style="font-size:12.5px; color:var(--text-muted); margin:8px 0 14px;">Get real-time <code>POST</code> notifications to your own endpoint — e.g. <code>payment.settled</code> whenever a talent under your pipeline gets paid. Each request is signed with your signing secret via an <code>X-FetchTalos-Signature</code> header (HMAC-SHA256 over the raw body), the same way FetchTalos itself verifies Felicity's webhooks.</p>
+      <div class="field" style="max-width:420px;"><label>Your endpoint URL</label><input id="webhookUrlInput" placeholder="https://yourapp.com/webhooks/fetchtalos"></div>
+      <button class="btn-primary" id="saveWebhookBtn">Save webhook URL</button>
+      <div id="webhookResult" style="margin-top:12px;"></div>
     </div>
   </section>
 
@@ -282,8 +327,9 @@ Segun Okoye, segun@example.com, NG, 82, Python|Django"></textarea>
 <div class="toast" id="toast"></div>
 
 <script>
-let BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
-let API_KEY = '';
+let BASE_URL = location.origin;
+document.getElementById('baseUrlInput').value = BASE_URL;
+let API_KEY = ''; // holds whatever credential is actually authenticating this session — a real ft_live_ key (advanced/manual connect) or an ft_session_ token (the normal magic-link login path). Never assume it's a usable API key — see Settings for that.
 let connected = false;
 let hubAccount = null;
 let plansCache = [];
@@ -315,27 +361,27 @@ document.querySelectorAll('.tabbtn').forEach(btn=>{
   });
 });
 
-async function connectWithKey(key){
-  API_KEY = key;
+async function connectWithKey(credential, opts){
+  opts = opts || {};
+  API_KEY = credential;
   try{
     const account = await api('/v1/hub/account');
     hubAccount = account;
     connected = true;
-    document.getElementById('connDot').classList.add('on');
-    document.getElementById('connLabel').textContent = account.hub_scope + ' — connected';
-    document.getElementById('logoutBtn').style.display = 'inline-block';
-    document.getElementById('authBanner').style.display = 'none';
-    try{ localStorage.setItem('fetchtalos_hub_key', key); localStorage.setItem('fetchtalos_hub_base', BASE_URL); }catch(e){}
-    showToast('Connected');
-    loadStats(); loadTalents(); loadMarkupPanel();
+    document.getElementById('authScreen').style.display = 'none';
+    document.getElementById('dashboardApp').style.display = '';
+    document.getElementById('connectedBar').style.display = 'flex';
+    document.getElementById('connLabel').textContent = account.hub_scope;
+    if(!opts.skipPersist){
+      try{ localStorage.setItem('fetchtalos_hub_credential', credential); localStorage.setItem('fetchtalos_hub_base', BASE_URL); }catch(e){}
+    }
+    loadStats(); loadTalents(); loadMarkupPanel(); loadApiKeyStatus(); loadWebhook();
     loadPlans().then(populateSimDropdowns);
     renderSimEngagements(); renderSimContracts();
     return true;
   }catch(err){
     connected = false;
-    document.getElementById('connDot').classList.remove('on');
-    document.getElementById('connLabel').textContent = 'connection failed';
-    showToast('Connect failed: ' + err.message + (err.data?.error==='hub_only' ? ' (this dashboard is for hub-type keys only)' : ''), true);
+    showToast('Connect failed: ' + err.message + (err.data?.error==='hub_only' ? ' (this dashboard is for hub-type accounts only)' : ''), true);
     return false;
   }
 }
@@ -348,79 +394,71 @@ document.getElementById('connectBtn').onclick = function(){
 };
 
 document.getElementById('logoutBtn').onclick = function(){
-  try{ localStorage.removeItem('fetchtalos_hub_key'); }catch(e){}
+  try{ localStorage.removeItem('fetchtalos_hub_credential'); }catch(e){}
   API_KEY = ''; connected = false; hubAccount = null;
   document.getElementById('hubKeyInput').value = '';
-  document.getElementById('connDot').classList.remove('on');
-  document.getElementById('connLabel').textContent = 'not connected';
-  document.getElementById('logoutBtn').style.display = 'none';
-  document.getElementById('authBanner').style.display = 'block';
+  document.getElementById('connectedBar').style.display = 'none';
+  document.getElementById('dashboardApp').style.display = 'none';
+  document.getElementById('authScreen').style.display = '';
   showToast('Logged out');
 };
 
-document.getElementById('showSignup').onclick = function(e){
-  e.preventDefault();
-  document.getElementById('signupForm').style.display = 'block';
-  document.getElementById('loginForm').style.display = 'none';
-};
-document.getElementById('showLogin').onclick = function(e){
-  e.preventDefault();
-  document.getElementById('loginForm').style.display = 'block';
-  document.getElementById('signupForm').style.display = 'none';
-};
+document.querySelectorAll('.auth-tab').forEach(btn=>{
+  btn.addEventListener('click', function(){
+    document.querySelectorAll('.auth-tab').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.auth-tab-panel').forEach(p=>p.classList.remove('active'));
+    this.classList.add('active');
+    document.getElementById('authTab-' + this.dataset.tab).classList.add('active');
+  });
+});
 
 document.getElementById('signupBtn').onclick = async function(){
   const client_id = document.getElementById('signupClientId').value.trim();
   const hub_scope = document.getElementById('signupHubScope').value.trim();
   const contact_email = document.getElementById('signupEmail').value.trim();
   if(!client_id || !hub_scope || !contact_email){ showToast('Fill in all three fields', true); return; }
-  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
   try{
     const res = await fetch(BASE_URL + '/v1/hub/signup', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ client_id, hub_scope, contact_email }) });
     const data = await res.json().catch(()=>({}));
     if(!res.ok) throw new Error(data.message || data.error || 'Signup failed');
-    showToast('Request received for "' + hub_scope + '" — you\'ll get an email once it\'s approved');
-    document.getElementById('signupForm').style.display = 'none';
+    showToast('Request received for "' + hub_scope + '" — you\'ll get an email once it\'s approved, then log in with this email');
+    document.getElementById('authTabLoginBtn').click();
+    document.getElementById('loginEmailInput').value = contact_email;
   }catch(err){ showToast('Signup failed: ' + err.message, true); }
 };
 
 document.getElementById('loginLinkBtn').onclick = async function(){
   const email = document.getElementById('loginEmailInput').value.trim();
   if(!email){ showToast('Enter your email', true); return; }
-  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
   try{
     const res = await fetch(BASE_URL + '/v1/hub/login-link', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email }) });
     await res.json().catch(()=>({}));
     showToast('If that email is registered, a login link is on its way — check your inbox');
-    document.getElementById('loginForm').style.display = 'none';
   }catch(err){ showToast('Something went wrong: ' + err.message, true); }
 };
 
 // On load: a magic-link token in the URL wins over any saved session;
-// otherwise restore a previously connected key from localStorage so a hub
+// otherwise restore a previously connected credential (a dashboard session
+// token from a past magic-link login, or a manually pasted key) so a hub
 // doesn't have to log in again on every visit/refresh.
 (async function initAuth(){
   const magic = new URLSearchParams(location.search).get('magic');
   if(magic){
-    BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
     history.replaceState({}, '', location.pathname);
     try{
       const res = await fetch(BASE_URL + '/v1/hub/magic/' + encodeURIComponent(magic));
       const data = await res.json().catch(()=>({}));
       if(!res.ok){ showToast(data.message || 'That login link is invalid or expired — request a new one', true); return; }
       if(data.status === 'pending'){ showToast(data.message || 'Your account is still pending approval', true); return; }
-      document.getElementById('hubKeyInput').value = data.api_key;
-      connectWithKey(data.api_key);
+      connectWithKey(data.session_token);
     }catch(err){ showToast('Login link failed: ' + err.message, true); }
     return;
   }
-  let savedKey, savedBase;
-  try{ savedKey = localStorage.getItem('fetchtalos_hub_key'); savedBase = localStorage.getItem('fetchtalos_hub_base'); }catch(e){}
-  if(savedKey){
-    if(savedBase) document.getElementById('baseUrlInput').value = savedBase;
-    BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
-    document.getElementById('hubKeyInput').value = savedKey;
-    connectWithKey(savedKey);
+  let savedCredential, savedBase;
+  try{ savedCredential = localStorage.getItem('fetchtalos_hub_credential'); savedBase = localStorage.getItem('fetchtalos_hub_base'); }catch(e){}
+  if(savedCredential){
+    if(savedBase){ BASE_URL = savedBase; document.getElementById('baseUrlInput').value = savedBase; }
+    connectWithKey(savedCredential, { skipPersist: true });
   }
 })();
 
@@ -564,6 +602,58 @@ document.getElementById('saveNotifyEmailBtn').onclick = async function(){
     hubAccount.hub_notification_email = email;
     document.getElementById('notifyEmailResult').innerHTML = '<span style="color:var(--teal);font-size:12.5px;">Saved</span>';
     showToast('Notification email updated');
+  }catch(err){ showToast('Failed: ' + err.message, true); }
+};
+
+/* SETTINGS — API key + webhook, for the hub's OWN systems, separate from
+   how this dashboard itself is logged into (see connectWithKey). */
+async function loadApiKeyStatus(){
+  if(!connected) return;
+  try{
+    const data = await api('/v1/hub/api-key');
+    document.getElementById('apiKeyStatus').innerHTML = data.has_key
+      ? `You have a key: <span class="mono">${data.key_preview}</span>`
+      : 'You haven\'t generated a key yet.';
+    document.getElementById('generateKeyBtn').textContent = data.has_key ? 'Regenerate API key' : 'Generate API key';
+  }catch(err){
+    document.getElementById('apiKeyStatus').textContent = 'You haven\'t generated a key yet.';
+  }
+}
+
+document.getElementById('generateKeyBtn').onclick = async function(){
+  const existing = document.getElementById('generateKeyBtn').textContent.startsWith('Regenerate');
+  if(existing && !confirm('Regenerating invalidates your current key immediately — anything using the old one will break until updated. Continue?')) return;
+  try{
+    const data = await api('/v1/hub/api-key/generate', { method:'POST' });
+    document.getElementById('apiKeyReveal').innerHTML = `
+      <div class="key-reveal">
+        <div style="font-size:11.5px;color:var(--text-faint);margin-bottom:6px;">${data.message}</div>
+        <div class="mono" style="font-size:13px;word-break:break-all;">${data.api_key}</div>
+      </div>`;
+    showToast('Key generated — copy it now');
+    loadApiKeyStatus();
+  }catch(err){ showToast('Failed to generate key: ' + err.message, true); }
+};
+
+async function loadWebhook(){
+  if(!connected) return;
+  try{
+    const data = await api('/v1/hub/webhook');
+    document.getElementById('webhookUrlInput').value = data.webhook_url || '';
+    document.getElementById('webhookResult').innerHTML = data.webhook_secret
+      ? `<div style="font-size:12px;color:var(--text-muted);">Signing secret: <span class="mono">${data.webhook_secret}</span></div>`
+      : '';
+  }catch(err){ /* no webhook set yet — leave the form blank */ }
+}
+
+document.getElementById('saveWebhookBtn').onclick = async function(){
+  const webhook_url = document.getElementById('webhookUrlInput').value.trim();
+  try{
+    const data = await api('/v1/hub/webhook', { method:'PATCH', body: JSON.stringify({ webhook_url }) });
+    document.getElementById('webhookResult').innerHTML = data.webhook_secret
+      ? `<div style="font-size:12px;color:var(--text-muted);">Signing secret: <span class="mono">${data.webhook_secret}</span></div>`
+      : '<span style="color:var(--text-muted);font-size:12.5px;">Webhook cleared</span>';
+    showToast(webhook_url ? 'Webhook saved' : 'Webhook cleared');
   }catch(err){ showToast('Failed: ' + err.message, true); }
 };
 
