@@ -452,6 +452,55 @@ const COVERAGE_PRODUCT_IDS = {
   remote_contractor_family: process.env.MYCOVER_PRODUCT_ID_FAMILY || null,
 };
 
+// Real fix for a bug Felicity confirmed and diagnosed themselves (2026-09):
+// a product_id pinned via MYCOVER_PRODUCT_ID_* only exists in ONE catalog —
+// test mode's sandbox catalog and live mode's real catalog are entirely
+// separate product spaces (test's "sbx_health_basic" doesn't exist live,
+// and vice versa). Since this app has one deployment and mode is decided
+// entirely by which key is currently configured (not something we choose
+// per request), a single pinned ID can never be right in both modes at
+// once. Fallback: if the pinned ID isn't found in whichever catalog is
+// currently active, look the product up by NAME instead — names are
+// stable in Felicity's real catalog even if IDs churn. Confirmed live
+// product names, per Felicity's own reply after the ₦0-premium bug report:
+// FlexiCare Mini Retail (Basic) and FlexiCare Retail (Plus) are Felicity's
+// own suggested natural price/cover pairing; PrimeCare (Family) was our
+// call, since Felicity's catalog has no product explicitly built for
+// dependents — PrimeCare is the closest (includes delivery/antenatal
+// cover). The exact field the catalog uses for a product's name isn't
+// confirmed the way base_premium/category.name are (Felicity's doc didn't
+// show a full product object) — resolveCoverageProduct below checks a few
+// plausible keys rather than assuming one.
+const COVERAGE_PRODUCT_NAME_FALLBACK = {
+  remote_contractor_basic: 'FlexiCare Mini Retail',
+  remote_contractor_plus: 'FlexiCare Retail',
+  remote_contractor_family: 'PrimeCare',
+};
+
+function coverageProductName(product) {
+  return product?.name || product?.product_name || product?.title || '';
+}
+
+// Single place every consumer (GET /v1/plans, quoteInsuranceNgn,
+// buyInsuranceNgn) resolves a plan to an actual product object within an
+// already-fetched catalog — ID first, name fallback second, so this stays
+// correct in test and live without needing separate deployments or manual
+// re-pointing of env vars when the active mode changes.
+function resolveCoverageProduct(plan, products) {
+  if (!Array.isArray(products)) return null;
+  const pinnedId = COVERAGE_PRODUCT_IDS[plan];
+  if (pinnedId) {
+    const byId = products.find(p => p.id === pinnedId || p.product_id === pinnedId);
+    if (byId) return byId;
+  }
+  const name = COVERAGE_PRODUCT_NAME_FALLBACK[plan];
+  if (name) {
+    const byName = products.find(p => coverageProductName(p).trim().toLowerCase() === name.toLowerCase());
+    if (byName) return byName;
+  }
+  return null;
+}
+
 // Required by buy_insurance on the NGN rail (§4 of the doc) — the specific
 // benefit line items a product covers, matched against what that product
 // actually offers. Confirmed ONLY for the basic plan, via its own real
@@ -1003,8 +1052,11 @@ async function onboardTalentNgn({ talent, contract }) {
  * passed through verbatim, same as the existing insurance flow).
  */
 async function buyInsuranceNgn({ talent, contract }) {
-  const product_id = COVERAGE_PRODUCT_IDS[contract.coverage_plan];
-  if (!product_id) return { coverage_status: 'gap_not_configured', coverage_note: `No product_id mapped for plan "${contract.coverage_plan}"` };
+  const catalog = await listInsuranceProductsNgn().catch(() => null);
+  const products = catalog?.products || catalog?.data || (Array.isArray(catalog) ? catalog : null);
+  const product = resolveCoverageProduct(contract.coverage_plan, products);
+  const product_id = product ? (product.id || product.product_id) : null;
+  if (!product_id) return { coverage_status: 'gap_not_configured', coverage_note: `No product found for plan "${contract.coverage_plan}" — neither the pinned MYCOVER_PRODUCT_ID_* nor the COVERAGE_PRODUCT_NAME_FALLBACK name matched anything in the current catalog.` };
 
   const benefits = COVERAGE_PRODUCT_BENEFITS[contract.coverage_plan];
   if (!benefits) {
@@ -1071,8 +1123,11 @@ async function buyInsuranceNgn({ talent, contract }) {
  * payment_plan were each confirmed through, not a guess to trust blindly.
  */
 async function quoteInsuranceNgn({ plan, coverage_months }) {
-  const product_id = COVERAGE_PRODUCT_IDS[plan];
-  if (!product_id) return { error: 'gap_not_configured', message: `No product_id mapped for plan "${plan}"` };
+  const catalog = await listInsuranceProductsNgn().catch(() => null);
+  const products = catalog?.products || catalog?.data || (Array.isArray(catalog) ? catalog : null);
+  const product = resolveCoverageProduct(plan, products);
+  const product_id = product ? (product.id || product.product_id) : null;
+  if (!product_id) return { error: 'gap_not_configured', message: `No product found for plan "${plan}" in the current catalog.` };
   const benefits = COVERAGE_PRODUCT_BENEFITS[plan];
 
   try {
@@ -1098,9 +1153,24 @@ async function getPolicyNgn(policy_reference) {
 }
 
 /** Real catalog pass-through — this is how we find out what benefit line
- * items a specific product actually has, rather than guessing. */
+ * items a specific product actually has, rather than guessing. In-memory
+ * cached for an hour — this is called on every /v1/plans load, every
+ * quote, and every buy, and the catalog doesn't change minute to minute. */
+let ngnInsuranceCatalogCache = null;
+let ngnInsuranceCatalogCacheAt = 0;
+const NGN_INSURANCE_CATALOG_CACHE_TTL_MS = 60 * 60 * 1000;
+
 async function listInsuranceProductsNgn() {
-  return felicityNgn('list_insurance_products');
+  if (ngnInsuranceCatalogCache && Date.now() - ngnInsuranceCatalogCacheAt < NGN_INSURANCE_CATALOG_CACHE_TTL_MS) {
+    return ngnInsuranceCatalogCache;
+  }
+  const result = await felicityNgn('list_insurance_products');
+  const products = result?.products || result?.data;
+  if (Array.isArray(products) && products.length) {
+    ngnInsuranceCatalogCache = result;
+    ngnInsuranceCatalogCacheAt = Date.now();
+  }
+  return result;
 }
 
 /**
@@ -2491,10 +2561,10 @@ app.get('/v1/plans', async (req, res) => {
   try {
     const catalog = await listInsuranceProductsNgn();
     const products = catalog.products || catalog.data || catalog;
-    const plans = Object.entries(COVERAGE_PRODUCT_IDS).map(([planKey, productId]) => {
+    const plans = Object.keys(COVERAGE_PRODUCT_NAME_FALLBACK).map((planKey) => {
       const label = coveragePlanCopy[planKey]?.label || planKey;
-      if (!productId) return { plan: planKey, label, configured: false };
-      const product = Array.isArray(products) ? products.find(p => p.id === productId || p.product_id === productId) : null;
+      const product = resolveCoverageProduct(planKey, products);
+      if (!product) return { plan: planKey, label, configured: false };
       return {
         plan: planKey,
         label,
