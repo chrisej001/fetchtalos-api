@@ -481,6 +481,24 @@ function coverageProductName(product) {
   return product?.name || product?.product_name || product?.title || '';
 }
 
+// Felicity's NGN-rail catalog (list_insurance_products) prices a product
+// via base_price, already in naira — NOT base_premium/kobo, which a
+// previous version of this code assumed (a leftover from a different
+// catalog's confirmed kobo pricing) without ever actually being verified
+// against a real response here. Confirmed directly against the real live
+// catalog (2026-09, pulled via GET /admin/felicity-ngn/products):
+// FlexiCare Mini Retail's base_price is "4000", matching Felicity's own
+// ₦4,000/mo quote exactly — every plan showing ₦0 despite resolving a
+// real product was this field mismatch, not a missing product.
+// is_percentage products (device-value-based cover, e.g. gadget) price
+// base_price as a PERCENTAGE instead of a flat amount — returns null for
+// those rather than showing a misleading number as a naira figure.
+function coverageProductPremiumNaira(product) {
+  if (!product || product.is_percentage) return null;
+  const value = Number(product.base_price);
+  return Number.isFinite(value) ? value : null;
+}
+
 // Single place every consumer (GET /v1/plans, quoteInsuranceNgn,
 // buyInsuranceNgn) resolves a plan to an actual product object within an
 // already-fetched catalog — ID first, name fallback second, so this stays
@@ -1234,7 +1252,7 @@ async function estimateInsuranceForDisplay(contract) {
     const catalog = await listInsuranceProductsNgn();
     const products = extractInsuranceProducts(catalog);
     const product = resolveCoverageProduct(contract.coverage_plan, products);
-    return { naira: koboFieldToNaira(product, 'base_premium', 'base_premium_naira') || 0, isLiveQuote: false };
+    return { naira: coverageProductPremiumNaira(product) || 0, isLiveQuote: false };
   } catch (err) {
     return { naira: 0, isLiveQuote: false };
   }
@@ -2171,7 +2189,7 @@ app.get('/admin/felicity-ngn/products', requireAdminKey, async (req, res) => {
       // Felicity's own kobo disclosure, not a guess.
       return res.json({
         plan: req.query.plan, product_id: match ? (match.id || match.product_id) : null, product: match || null,
-        base_premium_confirmed_naira: match ? koboFieldToNaira(match, 'base_premium', 'base_premium_naira') : null,
+        base_premium_confirmed_naira: match ? coverageProductPremiumNaira(match) : null,
         note: match ? undefined : `No product found for "${req.query.plan}" — neither the pinned COVERAGE_PRODUCT_IDS entry nor the COVERAGE_PRODUCT_NAME_FALLBACK name matched anything in the current catalog.`,
       });
     }
@@ -2552,24 +2570,13 @@ app.use('/v1', (req, res, next) => {
 // live from the actual Felicity catalog. Available to any authenticated
 // client (hub or enterprise) — both need this to make an informed choice
 // BEFORE a contract exists, not just see a bare plan name. Never surfaces
-// provider branding — only product_description/base_premium, which
-// Felicity's own doc confirms are brand-neutral by design.
-//
-// base_premium is denominated in KOBO, not naira — confirmed directly by
-// Felicity's integrations team after we flagged a real pricing
-// discrepancy (a live annual purchase debited ₦250, not the expected
-// amount). This was a genuine bug on our side: nothing in the original
-// API response disclosed the unit, and 250000 reads naturally as
-// ₦250,000 when it's actually ₦2,500. Felicity has since added an
-// explicit *_naira field to their catalog response — this prefers that
-// when present, and falls back to the confirmed /100 conversion of the
-// raw kobo field otherwise (a fixed, disclosed ratio, not a guess).
-function koboFieldToNaira(product, koboField, naira_field) {
-  if (product?.[naira_field] != null) return Number(product[naira_field]);
-  if (product?.[koboField] != null) return Number(product[koboField]) / 100;
-  return null;
-}
-
+// provider branding — only product_description/base_price, which
+// Felicity's own doc confirms are brand-neutral by design. Pricing itself
+// goes through coverageProductPremiumNaira (above) — base_price on this
+// catalog is already in naira, confirmed against the real live response,
+// not kobo (a koboFieldToNaira helper existed here previously assuming
+// otherwise; it was never actually correct for this catalog and always
+// silently produced ₦0 — removed once base_price was confirmed real).
 app.get('/v1/plans', async (req, res) => {
   if (!FELICITY_NGN_CONFIGURED) {
     return res.status(422).json({ error: 'not_configured', message: 'Live plan data isn\'t available yet — the NGN rail isn\'t configured.' });
@@ -2585,7 +2592,7 @@ app.get('/v1/plans', async (req, res) => {
         plan: planKey,
         label,
         configured: true,
-        base_premium_naira: koboFieldToNaira(product, 'base_premium', 'base_premium_naira'),
+        base_premium_naira: coverageProductPremiumNaira(product),
         description: product?.product_description ?? null,
         benefits: COVERAGE_PRODUCT_BENEFITS[planKey] || null,
         duration_options_months: product?.duration_options ?? null,
