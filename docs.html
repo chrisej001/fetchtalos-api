@@ -242,6 +242,9 @@
       </div>
       <div class="toc-group">
         <div class="toc-group-label">Hub self-service</div>
+        <a href="#hub-signup"><span class="m m-post">POST</span>hub/signup</a>
+        <a href="#hub-login-link"><span class="m m-post">POST</span>hub/login-link</a>
+        <a href="#hub-magic"><span class="m m-get">GET</span>hub/magic/:token</a>
         <a href="#hub-account"><span class="m m-get">GET</span>hub/account</a>
         <a href="#hub-markup"><span class="m m-patch">PATCH</span>hub/markup</a>
         <a href="#hub-settlement"><span class="m m-patch">PATCH</span>hub/settlement-account</a>
@@ -292,9 +295,9 @@
           </div>
         </div>
 
-        <div class="note warn" style="margin-top:18px;">
-          <div class="dot">!</div>
-          <div>Keys aren't self-service yet — there's no public signup. <a href="/#cta" style="color:var(--orange);text-decoration:underline;">Request access</a> and FetchTalos issues you a key directly.</div>
+        <div class="note info" style="margin-top:18px;">
+          <div class="dot">i</div>
+          <div>Enterprise keys are still issued directly — <a href="/#cta" style="color:var(--orange);text-decoration:underline;">request access</a>. Hub keys are self-service: see <a href="#hub-signup" style="color:var(--orange);text-decoration:underline;">POST /v1/hub/signup</a> below. A new hub's key is minted immediately but stays inactive until FetchTalos approves it — you'll get an email once it's live.</div>
         </div>
       </section>
 
@@ -304,6 +307,7 @@
         <div class="errors-grid">
           <div class="err-card"><div class="code">401 unauthorized</div><div class="desc">Missing or invalid bearer key.</div></div>
           <div class="err-card"><div class="code">403 hub_only</div><div class="desc">Route is restricted to hub-type keys (roster management, hub self-service).</div></div>
+          <div class="err-card"><div class="code">403 account_pending_approval</div><div class="desc">A self-serve hub signup exists but hasn't been approved yet — the key doesn't authenticate anything until it is.</div></div>
           <div class="err-card"><div class="code">404 *_not_found</div><div class="desc">Resource doesn't exist, or exists but isn't scoped to your key — both return the same 404, deliberately, so you can't probe for other clients' data.</div></div>
           <div class="err-card"><div class="code">409 conflict</div><div class="desc">Action doesn't make sense given current state — e.g. re-sending a contract that's already out, releasing an already-released contract.</div></div>
           <div class="err-card"><div class="code">422 not_configured</div><div class="desc">The route depends on an integration (insurance, NGN rail) that isn't configured server-side yet.</div></div>
@@ -631,7 +635,34 @@
       <!-- ============ HUB ============ -->
       <section class="doc-section" id="hub">
         <h2>Hub Self-Service</h2>
-        <p class="section-sub">Everything a hub needs to run its own white-labeled pipeline — markup rate, settlement account, notification email, roster, and stats. All routes below return <code style="font-family:var(--mono);">403 hub_only</code> for enterprise keys, and every write is silently forced into the caller's own <code style="font-family:var(--mono);">hub_scope</code> — a hub can never touch another hub's data no matter what a request body says.</p>
+        <p class="section-sub">Everything a hub needs to run its own white-labeled pipeline — markup rate, settlement account, notification email, roster, and stats. All routes below (other than signup/login) return <code style="font-family:var(--mono);">403 hub_only</code> for enterprise keys, and every write is silently forced into the caller's own <code style="font-family:var(--mono);">hub_scope</code> — a hub can never touch another hub's data no matter what a request body says.</p>
+
+        <div class="endpoint" id="hub-signup">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/hub/signup</span><span class="auth-pill public">public — no key</span></div>
+          <div class="endpoint-desc">Claim a pipeline name and request a hub account. Mints a key immediately, but it stays inactive (<code style="font-family:var(--mono);">403 account_pending_approval</code> on any authenticated route) until FetchTalos approves it — the key itself is only emailed to you at that point, not at signup.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">client_id</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">A name for your organization.</td></tr>
+            <tr><td class="pname">hub_scope</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">Your pipeline name, e.g. <code style="font-family:var(--mono)">"ALX Africa"</code>. Must not already be claimed — checked case-insensitively. <code style="font-family:var(--mono)">409 hub_scope_taken</code> if it is.</td></tr>
+            <tr><td class="pname">contact_email</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">Becomes your login identity for <a href="#hub-login-link" style="color:var(--orange);">login-link</a>. <code style="font-family:var(--mono)">409 email_taken</code> if already registered.</td></tr>
+          </table>
+        </div>
+
+        <div class="endpoint" id="hub-login-link">
+          <div class="endpoint-head"><span class="method post">POST</span><span class="path">/v1/hub/login-link</span><span class="auth-pill public">public — no key</span></div>
+          <div class="endpoint-desc">Passwordless login — emails a one-time link (valid 15 minutes) to your registered contact email. Always returns the same response whether or not the email matches an account, so this can't be used to enumerate registered hubs.</div>
+          <div class="subhead">Body parameters</div>
+          <table class="ptable">
+            <tr><th>Param</th><th>Type</th><th>Req</th><th>Description</th></tr>
+            <tr><td class="pname">email</td><td class="ptype">string</td><td class="preq y">yes</td><td class="pdesc">The contact email you signed up with.</td></tr>
+          </table>
+        </div>
+
+        <div class="endpoint" id="hub-magic">
+          <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/hub/magic/:token</span><span class="auth-pill public">public — no key</span></div>
+          <div class="endpoint-desc">Exchanges a one-time login-link token for your actual API key. Single-use and expires in 15 minutes. Returns <code style="font-family:var(--mono);">status: "pending"</code> instead of a key if your account is still awaiting approval, or <code style="font-family:var(--mono);">400 invalid_or_expired_link</code> for an unknown, already-used, or expired token.</div>
+        </div>
 
         <div class="endpoint" id="hub-account">
           <div class="endpoint-head"><span class="method get">GET</span><span class="path">/v1/hub/account</span><span class="auth-pill hub">hub key only</span></div>

@@ -86,6 +86,7 @@
     <input id="hubKeyInput" placeholder="Your hub API key" style="width:220px;">
     <button class="btn-primary" id="connectBtn">Connect</button>
     <span><span class="status-dot" id="connDot"></span> <span id="connLabel">not connected</span></span>
+    <button class="row-btn" id="logoutBtn" style="display:none;">Log out</button>
   </div>
 </div>
 
@@ -99,7 +100,29 @@
 </div>
 
 <main>
-  <div class="banner">This dashboard is entered with your hub API key — no separate login yet. Real account signup (email/password, admin-approved before going live) comes once a hub is ready to fully onboard.</div>
+  <div class="banner" id="authBanner">
+    <div id="authGate">
+      <b>Get access:</b>
+      <a href="#" id="showSignup" style="color:var(--amber);text-decoration:underline;">Claim your hub</a> (new here) &middot;
+      <a href="#" id="showLogin" style="color:var(--amber);text-decoration:underline;">Log in by email</a> (already registered, lost your key) &middot;
+      or paste your key directly in the bar above.
+    </div>
+    <div id="signupForm" style="display:none;margin-top:12px;">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:0;">
+        <input id="signupClientId" placeholder="Business / hub name">
+        <input id="signupHubScope" placeholder="Pipeline name (e.g. ALX Africa)">
+        <input id="signupEmail" type="email" placeholder="Contact email">
+      </div>
+      <div style="margin-top:10px;">
+        <button class="btn-primary row-btn" id="signupBtn">Request a hub account</button>
+        <span style="color:var(--text-faint);font-size:11.5px;margin-left:8px;">Reviewed manually — you'll get an email with your live key once it's approved.</span>
+      </div>
+    </div>
+    <div id="loginForm" style="display:none;margin-top:12px;">
+      <input id="loginEmailInput" type="email" placeholder="Your registered contact email" style="width:260px;">
+      <button class="btn-primary row-btn" id="loginLinkBtn">Email me a login link</button>
+    </div>
+  </div>
 
   <section class="panel active" id="panel-overview">
     <div class="panel-head"><h2>Overview</h2><p class="sub">GET /v1/hub/stats — your own activity only</p></div>
@@ -292,27 +315,114 @@ document.querySelectorAll('.tabbtn').forEach(btn=>{
   });
 });
 
-document.getElementById('connectBtn').onclick = async function(){
-  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
-  API_KEY = document.getElementById('hubKeyInput').value.trim();
-  if(!API_KEY){ showToast('Paste your hub API key first', true); return; }
+async function connectWithKey(key){
+  API_KEY = key;
   try{
     const account = await api('/v1/hub/account');
     hubAccount = account;
     connected = true;
     document.getElementById('connDot').classList.add('on');
     document.getElementById('connLabel').textContent = account.hub_scope + ' — connected';
+    document.getElementById('logoutBtn').style.display = 'inline-block';
+    document.getElementById('authBanner').style.display = 'none';
+    try{ localStorage.setItem('fetchtalos_hub_key', key); localStorage.setItem('fetchtalos_hub_base', BASE_URL); }catch(e){}
     showToast('Connected');
     loadStats(); loadTalents(); loadMarkupPanel();
     loadPlans().then(populateSimDropdowns);
     renderSimEngagements(); renderSimContracts();
+    return true;
   }catch(err){
     connected = false;
     document.getElementById('connDot').classList.remove('on');
     document.getElementById('connLabel').textContent = 'connection failed';
     showToast('Connect failed: ' + err.message + (err.data?.error==='hub_only' ? ' (this dashboard is for hub-type keys only)' : ''), true);
+    return false;
   }
+}
+
+document.getElementById('connectBtn').onclick = function(){
+  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+  const key = document.getElementById('hubKeyInput').value.trim();
+  if(!key){ showToast('Paste your hub API key first', true); return; }
+  connectWithKey(key);
 };
+
+document.getElementById('logoutBtn').onclick = function(){
+  try{ localStorage.removeItem('fetchtalos_hub_key'); }catch(e){}
+  API_KEY = ''; connected = false; hubAccount = null;
+  document.getElementById('hubKeyInput').value = '';
+  document.getElementById('connDot').classList.remove('on');
+  document.getElementById('connLabel').textContent = 'not connected';
+  document.getElementById('logoutBtn').style.display = 'none';
+  document.getElementById('authBanner').style.display = 'block';
+  showToast('Logged out');
+};
+
+document.getElementById('showSignup').onclick = function(e){
+  e.preventDefault();
+  document.getElementById('signupForm').style.display = 'block';
+  document.getElementById('loginForm').style.display = 'none';
+};
+document.getElementById('showLogin').onclick = function(e){
+  e.preventDefault();
+  document.getElementById('loginForm').style.display = 'block';
+  document.getElementById('signupForm').style.display = 'none';
+};
+
+document.getElementById('signupBtn').onclick = async function(){
+  const client_id = document.getElementById('signupClientId').value.trim();
+  const hub_scope = document.getElementById('signupHubScope').value.trim();
+  const contact_email = document.getElementById('signupEmail').value.trim();
+  if(!client_id || !hub_scope || !contact_email){ showToast('Fill in all three fields', true); return; }
+  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+  try{
+    const res = await fetch(BASE_URL + '/v1/hub/signup', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ client_id, hub_scope, contact_email }) });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(data.message || data.error || 'Signup failed');
+    showToast('Request received for "' + hub_scope + '" — you\'ll get an email once it\'s approved');
+    document.getElementById('signupForm').style.display = 'none';
+  }catch(err){ showToast('Signup failed: ' + err.message, true); }
+};
+
+document.getElementById('loginLinkBtn').onclick = async function(){
+  const email = document.getElementById('loginEmailInput').value.trim();
+  if(!email){ showToast('Enter your email', true); return; }
+  BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+  try{
+    const res = await fetch(BASE_URL + '/v1/hub/login-link', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email }) });
+    await res.json().catch(()=>({}));
+    showToast('If that email is registered, a login link is on its way — check your inbox');
+    document.getElementById('loginForm').style.display = 'none';
+  }catch(err){ showToast('Something went wrong: ' + err.message, true); }
+};
+
+// On load: a magic-link token in the URL wins over any saved session;
+// otherwise restore a previously connected key from localStorage so a hub
+// doesn't have to log in again on every visit/refresh.
+(async function initAuth(){
+  const magic = new URLSearchParams(location.search).get('magic');
+  if(magic){
+    BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+    history.replaceState({}, '', location.pathname);
+    try{
+      const res = await fetch(BASE_URL + '/v1/hub/magic/' + encodeURIComponent(magic));
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok){ showToast(data.message || 'That login link is invalid or expired — request a new one', true); return; }
+      if(data.status === 'pending'){ showToast(data.message || 'Your account is still pending approval', true); return; }
+      document.getElementById('hubKeyInput').value = data.api_key;
+      connectWithKey(data.api_key);
+    }catch(err){ showToast('Login link failed: ' + err.message, true); }
+    return;
+  }
+  let savedKey, savedBase;
+  try{ savedKey = localStorage.getItem('fetchtalos_hub_key'); savedBase = localStorage.getItem('fetchtalos_hub_base'); }catch(e){}
+  if(savedKey){
+    if(savedBase) document.getElementById('baseUrlInput').value = savedBase;
+    BASE_URL = document.getElementById('baseUrlInput').value.replace(/\/$/, '');
+    document.getElementById('hubKeyInput').value = savedKey;
+    connectWithKey(savedKey);
+  }
+})();
 
 /* OVERVIEW */
 async function loadStats(){

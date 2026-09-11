@@ -73,11 +73,26 @@ function requireApiKey(req, res, next) {
   if (!record) {
     return res.status(401).json({ error: 'unauthorized', message: 'Pass a valid key as: Authorization: Bearer <key>' });
   }
+  // Self-serve hub signups are minted immediately but start "pending" — the
+  // key exists and is even emailed nowhere yet, it just doesn't authenticate
+  // until an admin approves it. Keys with no status field at all (every key
+  // created before this existed, and every admin-minted key) are implicitly
+  // active — only an explicit 'pending' blocks the request.
+  if (record.status === 'pending') {
+    return res.status(403).json({ error: 'account_pending_approval', message: 'This hub account is still awaiting approval — you will be emailed once your key is live.' });
+  }
   req.clientId = record.client_id;
   req.clientType = record.type;
   req.hubScope = record.hub_scope; // null for enterprise keys, a pipeline name for hub keys
   next();
 }
+
+// One-time hub login/signup links: token -> { api_key, expires_at, used }.
+// Deliberately in-memory only, never persisted to Redis — these are
+// short-lived (15 min) and single-use, so losing them on a restart just
+// means requesting a fresh one, not a real data loss.
+const magicLinks = new Map();
+const MAGIC_LINK_TTL_MS = 15 * 60 * 1000;
 
 /* ---------------------------------------------------------------------- *
  * IN-MEMORY STORE
@@ -1671,9 +1686,49 @@ app.post('/admin/keys', requireAdminKey, async (req, res) => {
     hub_markup_bps: rate,
     hub_settlement_account: type === 'hub' ? (hub_settlement_account || null) : null,
     hub_notification_email: type === 'hub' ? (hub_notification_email || null) : null,
+    status: 'active', // admin-minted keys go live immediately — you ARE the approval step
   };
   await saveState();
   res.status(201).json({ api_key: newKey, client_id, type, hub_scope: KEYS[newKey].hub_scope, hub_markup_cap_bps: cap, hub_markup_bps: rate, hub_settlement_account: KEYS[newKey].hub_settlement_account, hub_notification_email: KEYS[newKey].hub_notification_email, persisted: PERSISTENCE_ENABLED });
+});
+
+// POST /admin/hub-signups/:hubScope/approve — flips a pending self-serve
+// hub signup (POST /v1/hub/signup) to active and emails the hub its real
+// key for the first time — it's never sent at signup, since it doesn't
+// authenticate until this happens. Addressed by hub_scope (unique,
+// non-secret) rather than the raw key, since GET /admin/keys only ever
+// exposes a masked preview of it.
+app.post('/admin/hub-signups/:hubScope/approve', requireAdminKey, async (req, res) => {
+  const entry = Object.entries(KEYS).find(([, r]) => r.type === 'hub' && r.hub_scope === req.params.hubScope);
+  if (!entry) return res.status(404).json({ error: 'hub_signup_not_found' });
+  const [apiKey, record] = entry;
+  if (record.status !== 'pending') return res.status(400).json({ error: 'not_pending', message: 'This hub is already active.' });
+
+  record.status = 'active';
+  await saveState();
+
+  if (record.hub_notification_email) {
+    await sendEmail({
+      to: record.hub_notification_email,
+      subject: 'FetchTalos — your hub account is live',
+      html: `<p>You're approved. Your live API key for <b>${record.hub_scope}</b>:</p><p style="font-family:monospace;background:#12151c;color:#f2f5f7;padding:10px 14px;border-radius:6px;display:inline-block;">${apiKey}</p><p>Open your dashboard any time at <a href="${PUBLIC_BASE_URL}/hub">${PUBLIC_BASE_URL}/hub</a> — log in with this email to get a fresh link if you ever lose the key.</p>`
+    });
+  }
+  res.json({ client_id: record.client_id, hub_scope: record.hub_scope, status: record.status });
+});
+
+// DELETE /admin/hub-signups/:hubScope — decline/remove a pending signup,
+// freeing the hub_scope name for someone else to claim. Refuses to touch
+// an already-active hub — this is only for signups still under review.
+app.delete('/admin/hub-signups/:hubScope', requireAdminKey, async (req, res) => {
+  const entry = Object.entries(KEYS).find(([, r]) => r.type === 'hub' && r.hub_scope === req.params.hubScope);
+  if (!entry) return res.status(404).json({ error: 'hub_signup_not_found' });
+  const [apiKey, record] = entry;
+  if (record.status !== 'pending') return res.status(400).json({ error: 'not_pending', message: 'Only pending signups can be declined — this hub is already active.' });
+
+  delete KEYS[apiKey];
+  await saveState();
+  res.json({ deleted: true, hub_scope: req.params.hubScope });
 });
 
 // PATCH /admin/keys/:apiKey — the admin-side update. Use this to set the
@@ -1710,6 +1765,8 @@ app.get('/admin/keys', requireAdminKey, (req, res) => {
     hub_markup_cap_bps: r.hub_markup_cap_bps || 0,
     hub_markup_bps: r.hub_markup_bps || 0,
     hub_settlement_account: r.hub_settlement_account || null,
+    hub_notification_email: r.hub_notification_email || null,
+    status: r.status || 'active', // keys minted before self-serve signup existed have no status field — implicitly active
     key_preview: key.slice(0, 12) + '…' + key.slice(-4)
   }));
   res.json({ count: list.length, results: list });
@@ -2207,6 +2264,14 @@ app.use('/v1', (req, res, next) => {
   if (req.method === 'POST' && /^\/contracts\/[^/]+\/accept$/.test(req.path)) {
     return next();
   }
+  // Hub signup/login are also public — a prospective hub has no key yet,
+  // and a returning hub who lost theirs can't authenticate with it either.
+  if (req.method === 'POST' && (req.path === '/hub/signup' || req.path === '/hub/login-link')) {
+    return next();
+  }
+  if (req.method === 'GET' && /^\/hub\/magic\/[^/]+$/.test(req.path)) {
+    return next();
+  }
   return requireApiKey(req, res, next);
 });
 
@@ -2434,6 +2499,99 @@ app.delete('/v1/talents/:id', async (req, res) => {
 function findOwnHubKeyRecord(clientId) {
   return Object.values(KEYS).find(r => r.type === 'hub' && r.client_id === clientId);
 }
+
+/* ---------------------------------------------------------------------- *
+ * HUB SIGNUP & LOGIN — public, no API key required (a prospective hub has
+ * none yet; a returning hub who lost theirs can't authenticate with it
+ * either). Login is passwordless: a hub proves ownership of its registered
+ * contact email by clicking a short-lived one-time link, which hands back
+ * whatever key already exists for that email — the key itself never
+ * doubles as the login credential, so losing it isn't losing the account.
+ *
+ * Signups are minted immediately (see POST /v1/hub/signup) but start
+ * status: 'pending' and simply don't authenticate (requireApiKey above)
+ * until an admin approves from admin.html — the real key is only ever
+ * emailed to the hub at that point, not at signup, since it's useless
+ * until then anyway.
+ * ---------------------------------------------------------------------- */
+
+// POST /v1/hub/signup — { client_id, hub_scope, contact_email }. hub_scope
+// must not already be claimed (case-insensitive) — first to claim a
+// pipeline name owns it, so self-service can't be used to hijack an
+// existing partner's data by re-registering their name.
+app.post('/v1/hub/signup', async (req, res) => {
+  const { client_id, hub_scope, contact_email } = req.body || {};
+  if (!client_id || !hub_scope || !contact_email) {
+    return res.status(400).json({ error: 'missing_fields', message: 'client_id, hub_scope, and contact_email are all required.' });
+  }
+  if (!contact_email.includes('@')) return res.status(400).json({ error: 'valid_email_required' });
+
+  const scopeTaken = Object.values(KEYS).some(r => r.type === 'hub' && r.hub_scope?.toLowerCase() === hub_scope.toLowerCase());
+  if (scopeTaken) {
+    return res.status(409).json({ error: 'hub_scope_taken', message: `"${hub_scope}" is already registered to a hub. If this is you, use "Log in" instead.` });
+  }
+  const emailTaken = Object.values(KEYS).some(r => r.type === 'hub' && r.hub_notification_email?.toLowerCase() === contact_email.toLowerCase());
+  if (emailTaken) {
+    return res.status(409).json({ error: 'email_taken', message: 'This email is already registered to a hub account. Use "Log in" instead.' });
+  }
+
+  const newKey = `ft_live_${crypto.randomBytes(9).toString('hex')}`;
+  KEYS[newKey] = {
+    client_id, type: 'hub', hub_scope,
+    hub_markup_cap_bps: 0, hub_markup_bps: 0,
+    hub_settlement_account: null,
+    hub_notification_email: contact_email,
+    status: 'pending',
+  };
+  await saveState();
+
+  await sendEmail({
+    to: contact_email,
+    subject: 'FetchTalos — your hub request is in review',
+    html: `<p>Thanks for signing up as <b>${hub_scope}</b>. We're reviewing your request — you'll get another email with your live API key as soon as it's approved.</p>`
+  });
+
+  res.status(201).json({ status: 'pending', hub_scope, message: 'Request received — pending approval. You will be emailed once your key is live.' });
+});
+
+// POST /v1/hub/login-link — { email }. Always responds identically whether
+// or not the email matches anything, so this can't be used to enumerate
+// which hub emails are registered.
+app.post('/v1/hub/login-link', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'valid_email_required' });
+
+  const match = Object.entries(KEYS).find(([, r]) => r.type === 'hub' && r.hub_notification_email?.toLowerCase() === email.toLowerCase());
+  if (match) {
+    const [apiKey] = match;
+    const token = crypto.randomBytes(24).toString('hex');
+    magicLinks.set(token, { api_key: apiKey, expires_at: Date.now() + MAGIC_LINK_TTL_MS, used: false });
+    await sendEmail({
+      to: email,
+      subject: 'FetchTalos — your hub dashboard login link',
+      html: `<p>Click below to open your hub dashboard. This link works once and expires in 15 minutes.</p><p><a href="${PUBLIC_BASE_URL}/hub?magic=${token}">Open my dashboard →</a></p>`
+    });
+  }
+  res.json({ ok: true, message: 'If that email has a hub account, a login link has been sent.' });
+});
+
+// GET /v1/hub/magic/:token — exchanges a one-time login token for the
+// underlying api_key. Single-use and short-lived; never distinguishes an
+// unknown token from an already-used or expired one in its response.
+app.get('/v1/hub/magic/:token', (req, res) => {
+  const entry = magicLinks.get(req.params.token);
+  if (!entry || entry.used || Date.now() > entry.expires_at) {
+    return res.status(400).json({ error: 'invalid_or_expired_link' });
+  }
+  entry.used = true;
+  const record = KEYS[entry.api_key];
+  if (!record) return res.status(404).json({ error: 'account_not_found' });
+
+  if (record.status === 'pending') {
+    return res.json({ status: 'pending', hub_scope: record.hub_scope, message: 'Your account is still awaiting approval — you will be emailed once your key is live.' });
+  }
+  res.json({ status: 'active', api_key: entry.api_key, client_id: record.client_id, hub_scope: record.hub_scope });
+});
 
 // PATCH /v1/hub/markup — set the hub's OWN white-label markup rate, always
 // clamped server-side to the cap YOU set (hub_markup_cap_bps) — never

@@ -152,10 +152,10 @@
       <button class="btn-primary" id="createKeyBtn">Create key</button>
       <div id="newKeyResult"></div>
 
-      <div class="panel-head" style="margin-top:34px;"><h2>All clients</h2><p class="sub">GET /admin/keys — click a hub's markup to update it (PATCH /admin/keys/:apiKey)</p></div>
+      <div class="panel-head" style="margin-top:34px;"><h2>All clients</h2><p class="sub">GET /admin/keys — click a hub's markup to update it (PATCH /admin/keys/:apiKey). Pending rows are self-serve hub signups (POST /v1/hub/signup) awaiting your approval.</p></div>
       <div class="tbl-wrap">
-        <table><thead><tr><th>Client ID</th><th>Type</th><th>Hub scope</th><th>Markup</th><th>Settlement account</th><th>Key preview</th></tr></thead>
-        <tbody id="keysTableBody"><tr><td colspan="6" class="empty-state">// connect to load</td></tr></tbody></table>
+        <table><thead><tr><th>Client ID</th><th>Type</th><th>Hub scope</th><th>Contact email</th><th>Markup</th><th>Settlement account</th><th>Key preview</th><th>Status</th></tr></thead>
+        <tbody id="keysTableBody"><tr><td colspan="8" class="empty-state">// connect to load</td></tr></tbody></table>
       </div>
     </section>
 
@@ -298,18 +298,45 @@ async function loadKeys(){
       const settleCell = k.type === 'hub' && k.hub_settlement_account
         ? `<span class="mono" style="font-size:11px;">${k.hub_settlement_account.account_number}<br>${k.hub_settlement_account.account_name}</span>`
         : (k.type === 'hub' ? '<span style="color:var(--red);font-size:11px;">not set</span>' : '—');
+      const statusCell = k.status === 'pending'
+        ? `<span style="color:var(--red);font-size:11px;">pending</span><br>
+           <button class="row-btn" style="margin-top:4px;" onclick="approveHubSignup('${k.hub_scope}')">Approve</button>
+           <button class="row-btn" style="margin-top:4px;" onclick="declineHubSignup('${k.hub_scope}')">Decline</button>`
+        : `<span style="color:var(--teal);font-size:11px;">active</span>`;
       return `<tr><td><strong>${k.client_id}</strong></td>
       <td><span class="type-pill ${k.type}">${k.type}</span></td>
       <td class="mono" style="font-size:11px;">${k.hub_scope || '—'}</td>
+      <td class="mono" style="font-size:11px;">${k.hub_notification_email || '—'}</td>
       <td>${markupCell}</td>
       <td>${settleCell}</td>
-      <td class="mono" style="font-size:11px; color:var(--text-faint);">${k.key_preview}</td></tr>`;
+      <td class="mono" style="font-size:11px; color:var(--text-faint);">${k.key_preview}</td>
+      <td>${statusCell}</td></tr>`;
     }).join('')
-      : `<tr><td colspan="6" class="empty-state">// no clients yet</td></tr>`;
+      : `<tr><td colspan="8" class="empty-state">// no clients yet</td></tr>`;
     keysFullListCache = data.results; // keyed by preview since the full key isn't returned by GET /admin/keys
   }catch(err){ showToast('Failed to load keys: ' + err.message, true); }
 }
 let keysFullListCache = [];
+
+// Approve/decline a pending self-serve hub signup (POST /v1/hub/signup).
+// Addressed by hub_scope, not the raw key — GET /admin/keys never exposes
+// a pending signup's full key, since it doesn't authenticate yet anyway.
+window.approveHubSignup = async function(hubScope){
+  if(!confirm(`Approve "${hubScope}"? This mints their key live and emails it to them.`)) return;
+  try{
+    await api('/admin/hub-signups/' + encodeURIComponent(hubScope) + '/approve', { method:'POST' });
+    showToast(`${hubScope} approved — key emailed`);
+    loadKeys();
+  }catch(err){ showToast('Approve failed: ' + err.message, true); }
+};
+window.declineHubSignup = async function(hubScope){
+  if(!confirm(`Decline "${hubScope}"? This deletes the pending request and frees up the name.`)) return;
+  try{
+    await api('/admin/hub-signups/' + encodeURIComponent(hubScope), { method:'DELETE' });
+    showToast(`${hubScope} declined`);
+    loadKeys();
+  }catch(err){ showToast('Decline failed: ' + err.message, true); }
+};
 
 // Sets the CEILING — the actual admin lever now. The hub's own rate is
 // self-serve from their own dashboard (PATCH /v1/hub/markup), always
