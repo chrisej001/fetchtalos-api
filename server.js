@@ -1783,10 +1783,18 @@ app.post('/admin/hub-signups/:hubScope/approve', requireAdminKey, async (req, re
     await sendEmail({
       to: record.hub_notification_email,
       subject: 'FetchTalos — your hub account is live',
-      html: `<p>You're approved. Your live API key for <b>${record.hub_scope}</b>:</p><p style="font-family:monospace;background:#12151c;color:#f2f5f7;padding:10px 14px;border-radius:6px;display:inline-block;">${apiKey}</p><p>Open your dashboard any time at <a href="${PUBLIC_BASE_URL}/hub">${PUBLIC_BASE_URL}/hub</a> — log in with this email to get a fresh link if you ever lose the key.</p>`
+      html: emailShell({
+        preheader: `Your hub account for ${record.hub_scope} is approved and live.`,
+        icon: { glyph: '&#10003;', accent: '#2fe6c6' },
+        headline: "You're approved",
+        bodyHtml: `<b style="color:#f2f5f7;">${record.hub_scope}</b> is now live on FetchTalos. Here's your API key — for your own systems to call this API with, not for logging into the dashboard (use your email for that).
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0 4px;"><tr><td style="background-color:#171b24;border:1px solid #232834;border-radius:8px;padding:14px 16px;font-family:'JetBrains Mono',Menlo,Consolas,monospace;font-size:13px;color:#f2f5f7;word-break:break-all;">${apiKey}</td></tr></table>
+          Save this now — you can roll a new one any time from your dashboard's Settings tab, but this exact value won't be shown again.
+          ${emailButton(`${PUBLIC_BASE_URL}/hub`, 'Open my dashboard →')}`,
+      }),
     });
   }
-  res.json({ client_id: record.client_id, hub_scope: record.hub_scope, status: record.status });
+  res.json({ client_id: record.client_id, hub_scope: record.hub_scope, status: record.status, api_key: apiKey });
 });
 
 // DELETE /admin/hub-signups/:hubScope — decline/remove a pending signup,
@@ -1801,6 +1809,39 @@ app.delete('/admin/hub-signups/:hubScope', requireAdminKey, async (req, res) => 
   delete KEYS[apiKey];
   await saveState();
   res.json({ deleted: true, hub_scope: req.params.hubScope });
+});
+
+// GET /admin/hubs/:hubScope/key — reveals a hub's raw API key on demand.
+// GET /admin/keys only ever lists a masked preview (deliberately, so the
+// key isn't casually exposed in a list view or a screenshot of it) — but
+// you hold the admin key, which already has ambient authority over every
+// client's data, so there's no real security reason to hide the raw value
+// from you specifically when you go looking for it. Addressed by hub_scope
+// so you never need the raw key already in hand to get it.
+app.get('/admin/hubs/:hubScope/key', requireAdminKey, (req, res) => {
+  const entry = Object.entries(KEYS).find(([, r]) => r.type === 'hub' && r.hub_scope === req.params.hubScope);
+  if (!entry) return res.status(404).json({ error: 'hub_not_found' });
+  const [apiKey, record] = entry;
+  res.json({ hub_scope: record.hub_scope, client_id: record.client_id, api_key: apiKey });
+});
+
+// PATCH /admin/hubs/:hubScope — admin management addressed by hub_scope
+// instead of the raw key, for exactly this: setting the markup ceiling
+// without needing to already have the key in hand (which, post self-serve
+// signup, you usually don't — GET /admin/keys never lists it). Currently
+// just the cap; PATCH /admin/keys/:apiKey still exists for anyone who does
+// have the raw key and wants to set other fields directly.
+app.patch('/admin/hubs/:hubScope', requireAdminKey, async (req, res) => {
+  const record = Object.values(KEYS).find(r => r.type === 'hub' && r.hub_scope === req.params.hubScope);
+  if (!record) return res.status(404).json({ error: 'hub_not_found' });
+
+  const { hub_markup_cap_bps } = req.body || {};
+  if (hub_markup_cap_bps !== undefined) {
+    record.hub_markup_cap_bps = Number(hub_markup_cap_bps) || 0;
+    if (record.hub_markup_bps > record.hub_markup_cap_bps) record.hub_markup_bps = record.hub_markup_cap_bps;
+  }
+  await saveState();
+  res.json({ hub_scope: record.hub_scope, hub_markup_cap_bps: record.hub_markup_cap_bps, hub_markup_bps: record.hub_markup_bps });
 });
 
 // PATCH /admin/keys/:apiKey — the admin-side update. Use this to set the
@@ -2620,7 +2661,12 @@ app.post('/v1/hub/signup', async (req, res) => {
   await sendEmail({
     to: contact_email,
     subject: 'FetchTalos — your hub request is in review',
-    html: `<p>Thanks for signing up as <b>${hub_scope}</b>. We're reviewing your request — you'll get another email with your live API key as soon as it's approved.</p>`
+    html: emailShell({
+      preheader: `Your request to partner as ${hub_scope} is in review.`,
+      icon: { glyph: '&#8226;', accent: '#ff8a4c' },
+      headline: 'Your request is in review',
+      bodyHtml: `Thanks for signing up as <b style="color:#f2f5f7;">${hub_scope}</b>. We're reviewing your request — you'll get another email with your live API key as soon as it's approved, and you can log into your dashboard any time with this email once it is.`,
+    }),
   });
 
   res.status(201).json({ status: 'pending', hub_scope, message: 'Request received — pending approval. You will be emailed once your key is live.' });
@@ -2641,7 +2687,14 @@ app.post('/v1/hub/login-link', async (req, res) => {
     await sendEmail({
       to: email,
       subject: 'FetchTalos — your hub dashboard login link',
-      html: `<p>Click below to open your hub dashboard. This link works once and expires in 15 minutes.</p><p><a href="${PUBLIC_BASE_URL}/hub?magic=${token}">Open my dashboard →</a></p>`
+      html: emailShell({
+        preheader: 'Your one-time hub dashboard login link.',
+        icon: { glyph: '&#8594;', accent: '#2fe6c6' },
+        headline: 'Log into your dashboard',
+        bodyHtml: `Click below to open your hub dashboard. This link works once and expires in 15 minutes.
+          ${emailButton(`${PUBLIC_BASE_URL}/hub?magic=${token}`, 'Open my dashboard →')}
+          Didn't request this? You can safely ignore it — nothing happens unless the link above is opened.`,
+      }),
     });
   }
   res.json({ ok: true, message: 'If that email has a hub account, a login link has been sent.' });

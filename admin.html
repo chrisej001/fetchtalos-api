@@ -291,7 +291,7 @@ async function loadKeys(){
     tbody.innerHTML = data.results.length ? data.results.map(k=>{
       const markupCell = k.type === 'hub'
         ? `<span class="mono" style="font-size:11.5px;">
-             <span style="cursor:pointer;color:${k.hub_markup_cap_bps ? 'var(--amber)' : 'var(--red)'};text-decoration:underline dotted;" onclick="updateHubMarkupCap('${k.key_preview}', '${k.client_id}', ${k.hub_markup_cap_bps||0})">cap: ${k.hub_markup_cap_bps ? (k.hub_markup_cap_bps/100)+'%' : '0% — click to set'}</span>
+             <span style="cursor:pointer;color:${k.hub_markup_cap_bps ? 'var(--amber)' : 'var(--red)'};text-decoration:underline dotted;" onclick="updateHubMarkupCap('${k.hub_scope}', ${k.hub_markup_cap_bps||0})">cap: ${k.hub_markup_cap_bps ? (k.hub_markup_cap_bps/100)+'%' : '0% — click to set'}</span>
              <br><span style="color:var(--text-faint);">rate: ${k.hub_markup_bps ? (k.hub_markup_bps/100)+'%' : 'not set by hub yet'}</span>
            </span>`
         : '—';
@@ -309,7 +309,7 @@ async function loadKeys(){
       <td class="mono" style="font-size:11px;">${k.hub_notification_email || '—'}</td>
       <td>${markupCell}</td>
       <td>${settleCell}</td>
-      <td class="mono" style="font-size:11px; color:var(--text-faint);">${k.key_preview}</td>
+      <td class="mono" style="font-size:11px; color:var(--text-faint);">${k.key_preview}${k.type === 'hub' ? `<br><span style="cursor:pointer;color:var(--amber);text-decoration:underline dotted;" onclick="revealHubKey('${k.hub_scope}')">reveal</span>` : ''}</td>
       <td>${statusCell}</td></tr>`;
     }).join('')
       : `<tr><td colspan="8" class="empty-state">// no clients yet</td></tr>`;
@@ -324,8 +324,9 @@ let keysFullListCache = [];
 window.approveHubSignup = async function(hubScope){
   if(!confirm(`Approve "${hubScope}"? This mints their key live and emails it to them.`)) return;
   try{
-    await api('/admin/hub-signups/' + encodeURIComponent(hubScope) + '/approve', { method:'POST' });
+    const result = await api('/admin/hub-signups/' + encodeURIComponent(hubScope) + '/approve', { method:'POST' });
     showToast(`${hubScope} approved — key emailed`);
+    alert(`${hubScope}'s live API key (also just emailed to them):\n\n${result.api_key}`);
     loadKeys();
   }catch(err){ showToast('Approve failed: ' + err.message, true); }
 };
@@ -338,24 +339,28 @@ window.declineHubSignup = async function(hubScope){
   }catch(err){ showToast('Decline failed: ' + err.message, true); }
 };
 
+// Reveals a hub's raw key on demand — you hold the admin key, which
+// already has ambient authority over every client's data, so there's no
+// real reason to hide this from you specifically once you go looking.
+window.revealHubKey = async function(hubScope){
+  try{
+    const result = await api('/admin/hubs/' + encodeURIComponent(hubScope) + '/key');
+    alert(`${hubScope}'s live API key:\n\n${result.api_key}`);
+  }catch(err){ showToast('Reveal failed: ' + err.message, true); }
+};
+
 // Sets the CEILING — the actual admin lever now. The hub's own rate is
 // self-serve from their own dashboard (PATCH /v1/hub/markup), always
 // clamped to whatever cap is set here; this is deliberately no longer
-// where the day-to-day rate gets changed.
-// The markup update needs the FULL api key (PATCH /admin/keys/:apiKey), but
-// GET /admin/keys only ever returns a masked preview — correctly, since
-// listing full keys over an admin dashboard would be its own risk. So this
-// asks for the full key once, same trust model as pasting it into the
-// connection bar in the first place.
-window.updateHubMarkupCap = async function(keyPreview, clientId, currentCapBps){
-  const fullKey = prompt(`Paste ${clientId}'s FULL api key to update its markup ceiling (only the masked preview "${keyPreview}" is ever listed):`);
-  if(!fullKey) return;
-  const pct = prompt(`New markup CEILING for ${clientId}, in percent (e.g. 5 for 5%). The hub sets their own rate up to this from their own dashboard. Current ceiling: ${currentCapBps/100}%`);
+// where the day-to-day rate gets changed. Addressed by hub_scope, not the
+// raw key — GET /admin/keys only ever returns a masked preview.
+window.updateHubMarkupCap = async function(hubScope, currentCapBps){
+  const pct = prompt(`New markup CEILING for "${hubScope}", in percent (e.g. 5 for 5%). The hub sets their own rate up to this from their own dashboard. Current ceiling: ${currentCapBps/100}%`);
   if(pct === null) return;
   const bps = Math.round(parseFloat(pct) * 100);
   if(isNaN(bps) || bps < 0){ showToast('Enter a valid percentage', true); return; }
   try{
-    await api('/admin/keys/' + encodeURIComponent(fullKey), { method:'PATCH', body: JSON.stringify({ hub_markup_cap_bps: bps }) });
+    await api('/admin/hubs/' + encodeURIComponent(hubScope), { method:'PATCH', body: JSON.stringify({ hub_markup_cap_bps: bps }) });
     showToast('Markup ceiling updated');
     loadKeys();
   }catch(err){ showToast('Failed to update markup ceiling: ' + err.message, true); }
