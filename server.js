@@ -1252,7 +1252,17 @@ async function estimateInsuranceForDisplay(contract) {
     const catalog = await listInsuranceProductsNgn();
     const products = extractInsuranceProducts(catalog);
     const product = resolveCoverageProduct(contract.coverage_plan, products);
-    return { naira: coverageProductPremiumNaira(product) || 0, isLiveQuote: false };
+    // base_price is a MONTHLY rate — confirmed by the catalog's own
+    // cover_period field (30, i.e. days) and, for PrimeCare specifically,
+    // spelled out directly in its own key_benefits text ("...quality
+    // healthcare at ₦40,000 per month"). The live quote path above already
+    // accounts for the full coverage_months duration via payment_plan;
+    // this fallback (only used when a live quote isn't available) has to
+    // do that multiplication itself, or it silently estimates a 12-month
+    // plan at 1/12th its real cost.
+    const monthlyNaira = coverageProductPremiumNaira(product) || 0;
+    const months = Number(contract.coverage_months) || 1;
+    return { naira: monthlyNaira * months, isLiveQuote: false };
   } catch (err) {
     return { naira: 0, isLiveQuote: false };
   }
@@ -2592,10 +2602,21 @@ app.get('/v1/plans', async (req, res) => {
         plan: planKey,
         label,
         configured: true,
-        base_premium_naira: coverageProductPremiumNaira(product),
-        description: product?.product_description ?? null,
-        benefits: COVERAGE_PRODUCT_BENEFITS[planKey] || null,
-        duration_options_months: product?.duration_options ?? null,
+        // Confirmed monthly (cover_period on the raw product is 30 days;
+        // PrimeCare's own key_benefits text spells out "...at ₦40,000 per
+        // month" directly) — never a flat/annual figure. premium_period is
+        // explicit so nothing consuming this has to guess or re-derive it.
+        monthly_premium_naira: coverageProductPremiumNaira(product),
+        premium_period: 'month',
+        description: product?.description ?? null,
+        // Real HTML straight from Felicity's own catalog (a rich-text
+        // editor's output — trusted provider content, same trust level as
+        // the policy documents this app already links to). key_benefits is
+        // the short summary shown on the plan card; full_benefits is the
+        // complete list, shown when a hub clicks through for detail.
+        key_benefits_html: product?.key_benefits ?? null,
+        full_benefits_html: product?.full_benefits ?? null,
+        cover_period_days: product?.cover_period ? Number(product.cover_period) : null,
       };
     });
     res.json({ plans });
