@@ -1320,9 +1320,14 @@ let ngnBanksCacheAt = 0;
 const NGN_BANKS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 async function listNgnBanks() {
-  if (ngnBanksCache && Date.now() - ngnBanksCacheAt < NGN_BANKS_CACHE_TTL_MS) return ngnBanksCache;
+  // Bug fixed here: this used to return the bare cached array on a cache
+  // hit but the full { success, banks } object on a miss — callers reading
+  // result.banks got undefined on every hit (arrays have no .banks
+  // property), silently returning an empty list after the very first call.
+  // Now always the same shape either way.
+  if (ngnBanksCache && Date.now() - ngnBanksCacheAt < NGN_BANKS_CACHE_TTL_MS) return { success: true, banks: ngnBanksCache };
   const result = await felicityNgn('list_banks');
-  if (result?.banks) {
+  if (result?.banks?.length) {
     ngnBanksCache = result.banks;
     ngnBanksCacheAt = Date.now();
   }
