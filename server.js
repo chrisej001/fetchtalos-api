@@ -1159,6 +1159,17 @@ async function buyInsuranceNgn({ talent, contract }) {
     };
   } catch (err) {
     console.warn('[felicity-ngn] buy_insurance failed:', err.message);
+    // Confirmed live (2026-09): the real insurer tracks policies by the
+    // customer's actual identity (BVN/NIN/phone), not by our internal
+    // contract_id — so re-purchasing for someone already covered under a
+    // DIFFERENT contract of ours correctly gets refused, with the premium
+    // hold reversed automatically. That's the insurer working as intended,
+    // not a failure from the talent's own perspective — they're already
+    // covered. Labeled distinctly so this reads honestly if it recurs for
+    // a real future talent, instead of looking like an unresolved bug.
+    if (/already has a policy/i.test(err.message)) {
+      return { coverage_status: 'already_covered', coverage_note: err.message };
+    }
     return { coverage_status: 'purchase_failed', coverage_note: err.message };
   }
 }
@@ -1576,7 +1587,10 @@ async function settleNgnPayment(contract) {
     const hadDocumentBefore = false;
     const coverage = await buyInsuranceNgn({ talent, contract });
     Object.assign(contract, coverage);
-    if (coverage.coverage_status === 'active') progress.insurance_purchased = true;
+    // already_covered is a resolved outcome too, not a failure to keep
+    // retrying — the talent has real coverage either way, and re-asking
+    // Felicity every retry would just get the same answer.
+    if (coverage.coverage_status === 'active' || coverage.coverage_status === 'already_covered') progress.insurance_purchased = true;
 
     // This was the real gap: in test mode, Felicity returns
     // policy_document_url synchronously inside buyInsuranceNgn's own

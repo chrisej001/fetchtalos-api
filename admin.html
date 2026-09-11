@@ -473,6 +473,8 @@ async function loadNgnContracts(){
         : c.ngn_status ? `<span style="font-size:11px;color:var(--red);">${c.ngn_status}${c.ngn_note?': '+c.ngn_note:''}</span>` : '<span style="color:var(--text-faint);">—</span>';
       const insurance = c.coverage_status === 'active'
         ? `<span style="font-size:11px;color:var(--teal);">${c.coverage_policy_id||''}${c.coverage_policy_document_url ? '<br><a href="'+c.coverage_policy_document_url+'" target="_blank" style="color:var(--amber);">document ready</a>' : '<br><span style="color:var(--text-faint);">doc pending</span>'}</span>`
+        : c.coverage_status === 'already_covered'
+          ? `<span style="font-size:11px;color:var(--amber);">already covered elsewhere — not a failure</span>`
         : c.coverage_status && c.coverage_status !== 'not_yet_purchased' ? `<span style="font-size:11px;color:var(--red);">${c.coverage_status}</span>` : '<span style="color:var(--text-faint);">not yet — first payment</span>';
       const progress = c.ngn_settlement_progress;
       const progressLine = progress
