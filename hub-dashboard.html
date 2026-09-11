@@ -433,6 +433,8 @@ document.getElementById('loginLinkBtn').onclick = async function(){
   try{
     const res = await fetch(BASE_URL + '/v1/hub/login-link', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email }) });
     await res.json().catch(()=>({}));
+    document.getElementById('loginEmailInput').value = '';
+    document.getElementById('loginEmailInput').placeholder = 'Link sent — check your inbox';
     showToast('If that email is registered, a login link is on its way — check your inbox');
   }catch(err){ showToast('Something went wrong: ' + err.message, true); }
 };
