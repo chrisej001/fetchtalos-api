@@ -24,9 +24,19 @@ app.use(express.urlencoded({ extended: true })); // needed for the talent-facing
  * ---------------------------------------------------------------------- */
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
-app.get('/hub', (req, res) => res.sendFile(path.join(__dirname, 'hub-dashboard.html')));
 app.get('/docs', (req, res) => res.sendFile(path.join(__dirname, 'docs.html')));
 app.use('/assets', express.static(path.join(__dirname, 'assets'))); // favicon, OG preview image, W-8BEN template
+
+// /hub — a real React SPA (see hub-dashboard/), built by the postinstall
+// hook below so `npm install` at the repo root is the only step Render
+// needs; no separate build command to configure there. Static assets
+// (JS/CSS chunks) are served under /hub/ first; the explicit GET /hub
+// below always falls through to index.html regardless of query string
+// (e.g. the magic-link login URL /hub?magic=...) or static-middleware
+// trailing-slash behavior.
+const HUB_DASHBOARD_DIST = path.join(__dirname, 'hub-dashboard', 'dist');
+app.use('/hub', express.static(HUB_DASHBOARD_DIST));
+app.get('/hub', (req, res) => res.sendFile(path.join(HUB_DASHBOARD_DIST, 'index.html')));
 
 /* ---------------------------------------------------------------------- *
  * AUTH — Stripe/Paystack-style bearer key. Two key TYPES now exist:
