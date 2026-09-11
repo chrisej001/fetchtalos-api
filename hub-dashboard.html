@@ -65,6 +65,14 @@
   .plan-card h3{font-size:17px; margin-bottom:6px;}
   .plan-card .price{color:var(--teal); font-size:22px; font-family:'Bricolage Grotesque',sans-serif; margin:8px 0;}
   .plan-card ul{margin:8px 0; padding-left:20px; font-size:13px; color:var(--text-muted);}
+  /* Felicity's key_benefits/full_benefits HTML carries its own inline
+     colors (built for a light dashboard) — override with !important since
+     that's the only thing that beats an inline style attribute. */
+  .plan-benefits{margin-top:10px; font-size:13px; line-height:1.6;}
+  .plan-benefits, .plan-benefits *{color:var(--text-muted) !important; background:transparent !important;}
+  .plan-benefits strong{color:var(--text) !important;}
+  .plan-benefits ul, .plan-benefits ol{padding-left:18px; margin:6px 0;}
+  .plan-benefits p{margin:6px 0;}
   .toast{position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--bg-raised); border:1px solid var(--border); padding:11px 20px; border-radius:8px; font-size:13px; opacity:0; transition:.25s; pointer-events:none; max-width:520px; text-align:center;}
   .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
   .toast.err{border-color:var(--red); color:var(--red);}
@@ -732,18 +740,19 @@ async function loadPlans(){
   try{
     const data = await api('/v1/plans');
     plansCache = data.plans.filter(p=>p.configured);
-    container.innerHTML = data.plans.map(p=>{
+    container.innerHTML = data.plans.map((p,i)=>{
       if(!p.configured) return `<div class="plan-card"><h3>${p.label}</h3><p style="color:var(--text-faint);font-size:12.5px;">Not yet available on this plan.</p></div>`;
       return `<div class="plan-card">
         <h3>${p.label}</h3>
         ${p.description ? `<p style="font-size:12.5px;color:var(--text-muted);">${p.description}</p>` : ''}
-        <div class="price">₦${(p.base_premium_naira||0).toLocaleString()} <span style="font-size:12px;color:var(--text-faint);">base premium</span></div>
-        ${p.benefits ? '<ul>'+p.benefits.map(b=>'<li>'+b+'</li>').join('')+'</ul>' : '<p style="font-size:12px;color:var(--text-faint);">Benefits not yet confirmed for this plan.</p>'}
+        <div class="price">₦${(p.monthly_premium_naira||0).toLocaleString()}<span style="font-size:14px;color:var(--text-faint);">/mo</span> <span style="font-size:12px;color:var(--text-faint);">base premium</span></div>
+        ${p.key_benefits_html ? `<div class="plan-benefits">${p.key_benefits_html}</div>` : '<p style="font-size:12px;color:var(--text-faint);">Benefits not yet confirmed for this plan.</p>'}
+        ${p.full_benefits_html ? `<button class="row-btn" style="margin-top:10px;" onclick="document.getElementById('planFull${i}').style.display = document.getElementById('planFull${i}').style.display === 'none' ? 'block' : 'none';">See full coverage details</button><div id="planFull${i}" class="plan-benefits" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px;">${p.full_benefits_html}</div>` : ''}
       </div>`;
     }).join('');
 
     const sel = document.getElementById('calcPlan');
-    sel.innerHTML = '<option value="">Select a plan…</option>' + plansCache.map(p=>`<option value="${p.plan}">${p.label} — ₦${(p.base_premium_naira||0).toLocaleString()}</option>`).join('');
+    sel.innerHTML = '<option value="">Select a plan…</option>' + plansCache.map(p=>`<option value="${p.plan}">${p.label} — ₦${(p.monthly_premium_naira||0).toLocaleString()}/mo</option>`).join('');
   }catch(err){
     container.innerHTML = `<div class="empty-state">${err.message}</div>`;
   }
@@ -765,10 +774,11 @@ document.getElementById('calcBtn').onclick = async function(){
   const hubMarkup = +(salary * hubMarkupBps / 10000).toFixed(2);
 
   // Try a REAL live quote for this exact plan+duration first — falls back
-  // to the catalog's static base_premium if it fails, since quote_insurance's
-  // exact shape isn't fully confirmed yet. Either way, the label below
+  // to the catalog's monthly rate × duration if it fails (monthly_premium_naira
+  // is a per-month figure, confirmed against the real catalog — never the
+  // flat total for the whole coverage period). Either way, the label below
   // says plainly which one is being shown.
-  let insurance = plan.base_premium_naira || 0;
+  let insurance = (plan.monthly_premium_naira || 0) * duration;
   let isLiveQuote = false;
   try{
     const quote = await api(`/v1/plans/quote?plan=${planKey}&months=${duration}`);
@@ -817,7 +827,7 @@ function populateSimDropdowns(){
   }).catch(()=>{});
   const planSel = document.getElementById('simPlan');
   planSel.innerHTML = '<option value="">Select a plan…</option>' +
-    plansCache.map(p=>`<option value="${p.plan}">${p.label} — ₦${(p.base_premium_naira||0).toLocaleString()}/mo</option>`).join('');
+    plansCache.map(p=>`<option value="${p.plan}">${p.label} — ₦${(p.monthly_premium_naira||0).toLocaleString()}/mo</option>`).join('');
   planSel.onchange = updateSimPlanDetails;
   updateSimPlanDetails();
 }
@@ -832,8 +842,8 @@ function updateSimPlanDetails(){
   box.innerHTML = `
     <div class="card" style="padding:14px 16px;">
       ${plan.description ? `<div style="font-size:12.5px;color:var(--text-muted);margin-bottom:8px;">${plan.description}</div>` : ''}
-      <div style="color:var(--teal);font-size:16px;font-family:'Bricolage Grotesque',sans-serif;margin-bottom:6px;">₦${(plan.base_premium_naira||0).toLocaleString()} base premium</div>
-      ${plan.benefits ? '<ul style="margin:4px 0 0;padding-left:18px;font-size:12.5px;color:var(--text-muted);">'+plan.benefits.map(b=>'<li>'+b+'</li>').join('')+'</ul>' : '<div style="font-size:12px;color:var(--text-faint);">Benefits not yet confirmed for this plan.</div>'}
+      <div style="color:var(--teal);font-size:16px;font-family:'Bricolage Grotesque',sans-serif;margin-bottom:6px;">₦${(plan.monthly_premium_naira||0).toLocaleString()}/mo base premium</div>
+      ${plan.key_benefits_html ? `<div class="plan-benefits" style="font-size:12.5px;color:var(--text-muted);">${plan.key_benefits_html}</div>` : '<div style="font-size:12px;color:var(--text-faint);">Benefits not yet confirmed for this plan.</div>'}
     </div>`;
 }
 
