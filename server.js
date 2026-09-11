@@ -1117,10 +1117,20 @@ async function buyInsuranceNgn({ talent, contract }) {
 
   try {
     const [firstName, ...rest] = talent.name.split(' ');
+    // Confirmed live (2026-09): a real purchase against this exact product
+    // failed with "Could not determine premium for this product" when
+    // amount_naira was omitted, despite base_price being a fixed, non-
+    // percentage value on the product itself — the doc's claim that
+    // amount_naira is "optional if the product has a fixed base_price"
+    // didn't hold for this product in practice. Passing it explicitly
+    // (monthly rate × the coverage duration) is also exactly what the doc
+    // recommends if you want certainty over what gets quoted and debited.
+    const amount_naira = coverageProductPremiumNaira(product) * (Number(contract.coverage_months) || 1);
     const payload = {
       action: 'buy_insurance',
       talent_ref: contract.contract_id,
       product_id,
+      amount_naira,
       customer_first_name: firstName,
       customer_last_name: rest.join(' ') || firstName,
       customer_phone: talent.phone,
@@ -3421,13 +3431,19 @@ function invalidLinkPage() {
 
 // GET /v1/contracts/:id/accept — TALENT-facing, public, no API key. THIS is
 // the only place a talent's status is allowed to flip to "engaged".
-// Major Nigerian banks whose CBN codes are long-established and stable —
-// deliberately NOT including newer digital/fintech banks (Kuda, Opay,
-// PalmPay, Moniepoint etc.), since those have had code reissues and I
-// don't have confident, current knowledge of their exact codes. Anyone
-// whose bank isn't here falls through to "Other" and enters it manually —
-// better to be honest about the gap than silently guess a wrong code.
-const NIGERIA_BANKS = [
+// FALLBACK ONLY — used when Felicity isn't configured at all (local/dev),
+// since there's nothing live to fetch in that case. These codes are NOT
+// Felicity's real scheme (confirmed the hard way: every one of these
+// except Rubies MFB is wrong against Felicity's actual list_banks
+// response — e.g. this hardcodes Zenith Bank as '057', the standard CBN
+// code most Nigerian payment APIs use, but Felicity's real code for
+// Zenith is '000015'. A talent who picked their bank from this list
+// before this fix was live had an invalid bank_code stored, which is
+// exactly what surfaced as a real "Invalid Bank Code" send failure on a
+// real settlement — see renderKycForm below, which now fetches the real
+// list from Felicity whenever it's configured, and only falls back to
+// this when there's nothing live to ask.
+const NIGERIA_BANKS_FALLBACK = [
   ['044', 'Access Bank'], ['063', 'Access Bank (Diamond)'], ['050', 'Ecobank Nigeria'],
   ['070', 'Fidelity Bank'], ['011', 'First Bank of Nigeria'], ['214', 'First City Monument Bank (FCMB)'],
   ['058', 'Guaranty Trust Bank (GTBank)'], ['082', 'Keystone Bank'], ['076', 'Polaris Bank'],
@@ -3436,7 +3452,21 @@ const NIGERIA_BANKS = [
   ['057', 'Zenith Bank'], ['090175', 'Rubies MFB'],
 ];
 
-function renderKycForm(contract, missingFields, token) {
+async function renderKycForm(contract, missingFields, token) {
+  // Real bank list, straight from Felicity, whenever it's configured —
+  // the only source of bank_code values that are actually valid against
+  // the system this talent's real payout ultimately goes through.
+  let bankOptions = NIGERIA_BANKS_FALLBACK;
+  if (FELICITY_NGN_CONFIGURED) {
+    try {
+      const result = await listNgnBanks();
+      if (result?.banks?.length) {
+        bankOptions = result.banks.map(b => [b.code, b.name]);
+      }
+    } catch (err) {
+      console.warn('[kyc-form] live bank list fetch failed, falling back to the static list:', err.message);
+    }
+  }
   const PLACEHOLDERS = {
     rubies_account_name: 'e.g. Felix Okoye',
     rubies_account_number: 'e.g. 0123456789',
@@ -3470,7 +3500,7 @@ function renderKycForm(contract, missingFields, token) {
       // picks the code automatically from a bank-name dropdown; anyone
       // whose bank isn't in the list can still enter a code manually via
       // the "Other" option, which reveals a plain text fallback input.
-      const options = NIGERIA_BANKS.map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
+      const options = bankOptions.map(([code, name]) => `<option value="${code}">${name}</option>`).join('');
       return `<label class="field-label">Your bank</label>
         <select id="bankSelect" onchange="document.getElementById('bankCodeManual').style.display = this.value === 'other' ? 'block' : 'none'; document.getElementById('bankCodeManual').required = this.value === 'other'; document.getElementById('bankCodeHidden').value = this.value === 'other' ? '' : this.value;">
           <option value="">Select your bank…</option>
@@ -3654,7 +3684,7 @@ app.get('/v1/contracts/:id/accept', async (req, res) => {
     missing.push(field);
   }
   if (missing.length) {
-    return res.send(renderKycForm(contract, missing, req.query.token));
+    return res.send(await renderKycForm(contract, missing, req.query.token));
   }
 
   await finalizeContractAcceptance(contract);

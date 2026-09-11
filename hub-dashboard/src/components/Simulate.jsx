@@ -59,7 +59,12 @@ function EngageTab({ plans }) {
       });
       setResult(`Interview invite sent — engagement ${eng.engagement_id}. Switch to the Engagements tab to continue — it's saved on the server now, refreshing this page won't lose it.`);
       showToast('Engagement created');
-      setSalary(''); setKpis('');
+      // Clear the whole form, not just a couple of fields — an unchanged
+      // form after clicking "send" reads as if nothing happened, even
+      // though it's saved server-side (the message above says so).
+      setTalentId(''); setEmployer('Acme Corp'); setEmployerEmail(''); setRole('Backend Engineer');
+      setPlanKey(''); setDuration('12'); setSalary('');
+      setInterviewLink('https://calendly.com/example/interview'); setKpis('');
     } catch (err) {
       showToast('Failed: ' + err.message, true);
     }
